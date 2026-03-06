@@ -1,18 +1,21 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   ArrowLeft, Download, Plus, Trash2, FileText, Info,
   ChevronDown, ChevronUp, Paperclip, Terminal, Database,
-  Cpu, Activity, Zap, Server, HardDrive
+  Cpu, Activity, Zap, Server, HardDrive, Upload, AlertTriangle, Check
 } from 'lucide-react';
 import Header from '../components/Header';
 import SuccessToast from '../components/SuccessToast';
 import { exportToExcelWithSummary, calculateSummary } from '../utils/exportToExcel';
 import { getAnalysisData, clearAnalysisData } from '../utils/storage';
+import { analyzeDrawing, mockAnalyzeDrawing } from '../utils/analyzeDrawing';
+import { validateFiles } from '../utils/fileValidator';
 
 export default function ResultsPage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const fileInputRef = useRef(null);
 
   const [data, setData] = useState(null);
   const [instruments, setInstruments] = useState([]);
@@ -25,6 +28,11 @@ export default function ResultsPage() {
   const [newDescription, setNewDescription] = useState('');
   const [showPidDetails, setShowPidDetails] = useState(false);
 
+  // Multi-PDF accumulation state
+  const [analyzedFiles, setAnalyzedFiles] = useState([]);
+  const [addingFile, setAddingFile] = useState(false);
+  const [addFileProgress, setAddFileProgress] = useState('');
+
   useEffect(() => {
     let analysisData = location.state;
     if (!analysisData) {
@@ -35,11 +43,42 @@ export default function ResultsPage() {
       return;
     }
     setData(analysisData);
-    setInstruments(analysisData.instruments);
+
+    // Tag each instrument with its source file
+    const sourceName = analysisData.filename || 'Unknown';
+    const taggedInstruments = analysisData.instruments.map(inst => ({
+      ...inst,
+      sourceFile: inst.sourceFile || inst.source || sourceName,
+    }));
+    setInstruments(taggedInstruments);
+
+    // Build initial file tracker
+    const initialFiles = [];
+    if (analysisData.fileResults) {
+      analysisData.fileResults.forEach(r => {
+        initialFiles.push({
+          name: r.filename,
+          count: r.count,
+          success: r.success,
+        });
+      });
+    } else {
+      initialFiles.push({
+        name: sourceName,
+        count: taggedInstruments.length,
+        success: true,
+      });
+    }
+    setAnalyzedFiles(initialFiles);
+
     clearAnalysisData();
   }, [location.state, navigate]);
 
   const handleBackToHome = () => {
+    navigate('/');
+  };
+
+  const handleStartFresh = () => {
     navigate('/');
   };
 
@@ -77,11 +116,82 @@ export default function ResultsPage() {
       tag: newTag.trim(),
       signalType: newSignalType,
       description: newDescription.trim() || 'No description',
+      sourceFile: 'Manual Entry',
+      location: '',
+      equipment: '',
+      equipmentId: '',
+      isAlarm: false,
     };
     setInstruments([...instruments, newInstrument]);
     setNewTag('');
     setNewSignalType('AI');
     setNewDescription('');
+  };
+
+  // Add Another P&ID handler
+  const handleAddAnotherPdf = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleNewFileSelected = async (e) => {
+    const selectedFiles = Array.from(e.target.files || []);
+    if (selectedFiles.length === 0) return;
+    e.target.value = '';
+
+    const validation = validateFiles(selectedFiles);
+    if (validation.validFiles.length === 0) {
+      alert('No valid files selected.');
+      return;
+    }
+
+    setAddingFile(true);
+
+    for (const file of validation.validFiles) {
+      setAddFileProgress(`Analyzing ${file.name}...`);
+      try {
+        const newInstruments = await analyzeDrawing(file, data?.template || 'isa-5.1');
+
+        // Tag with source file
+        const tagged = newInstruments.map(inst => ({
+          ...inst,
+          sourceFile: file.name,
+        }));
+
+        // Append to instruments
+        setInstruments(prev => [...prev, ...tagged]);
+
+        // Update file tracker
+        setAnalyzedFiles(prev => [...prev, {
+          name: file.name,
+          count: tagged.length,
+          success: true,
+        }]);
+
+        setSuccessMessage(`Added ${tagged.length} instruments from ${file.name}`);
+        setShowSuccess(true);
+      } catch (err) {
+        console.error('Add file error:', err);
+        setAnalyzedFiles(prev => [...prev, {
+          name: file.name,
+          count: 0,
+          success: false,
+        }]);
+        alert(`Failed to analyze ${file.name}: ${err.message}`);
+      }
+    }
+
+    setAddingFile(false);
+    setAddFileProgress('');
+  };
+
+  // Check for duplicate tags
+  const getDuplicateTags = () => {
+    const tagCounts = {};
+    instruments.forEach(inst => {
+      const key = `${inst.tag}|${inst.signalType}`;
+      tagCounts[key] = (tagCounts[key] || 0) + 1;
+    });
+    return tagCounts;
   };
 
   const getSignalBadgeClass = (type) => {
@@ -90,6 +200,7 @@ export default function ResultsPage() {
       DI: 'signal-badge di',
       DO: 'signal-badge do',
       AO: 'signal-badge ao',
+      COM: 'signal-badge com',
     };
     return classes[type] || 'signal-badge';
   };
@@ -99,6 +210,8 @@ export default function ResultsPage() {
   }
 
   const summary = calculateSummary(instruments);
+  const duplicateTags = getDuplicateTags();
+  const totalFiles = analyzedFiles.length;
 
   return (
     <div className="terminal-container min-h-screen flex flex-col">
@@ -110,6 +223,16 @@ export default function ResultsPage() {
           onClose={() => setShowSuccess(false)}
         />
       )}
+
+      {/* Hidden file input for adding more PDFs */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        accept=".pdf,image/png,image/jpeg,image/jpg"
+        onChange={handleNewFileSelected}
+        multiple
+      />
 
       <main className="flex-1 px-6 py-20">
         <div className="max-w-7xl mx-auto">
@@ -135,6 +258,71 @@ export default function ResultsPage() {
             </div>
           </div>
 
+          {/* File Tracker Banner */}
+          <div className="hud-card p-4 mb-6">
+            <div className="hud-card-corners"></div>
+            <div className="relative z-10">
+              <div className="flex items-center justify-between mb-3">
+                <div className="terminal-header">
+                  <Database className="w-4 h-4" />
+                  <span>Showing {instruments.length} instruments from {totalFiles} file{totalFiles !== 1 ? 's' : ''}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleAddAnotherPdf}
+                    disabled={addingFile}
+                    className="hardware-switch text-xs"
+                  >
+                    {addingFile ? (
+                      <>
+                        <Cpu className="w-3 h-3 ml-2 animate-spin" />
+                        <span className="text-xs">{addFileProgress || 'PROCESSING...'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-3 h-3 ml-2" />
+                        <span className="text-xs">ADD ANOTHER P&ID</span>
+                      </>
+                    )}
+                  </button>
+                  <button
+                    onClick={handleStartFresh}
+                    className="hardware-switch secondary text-xs"
+                  >
+                    <Trash2 className="w-3 h-3 ml-2" />
+                    <span className="text-xs">START FRESH</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* File list */}
+              <div className="space-y-1">
+                {analyzedFiles.map((file, index) => (
+                  <div
+                    key={index}
+                    className={`flex items-center justify-between p-2 font-mono text-xs border ${
+                      file.success
+                        ? 'bg-[#22c55e]/5 border-[#22c55e]/20 text-[#22c55e]'
+                        : 'bg-[#f85149]/5 border-[#f85149]/20 text-[#f85149]'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      {file.success ? (
+                        <Check className="w-3 h-3" />
+                      ) : (
+                        <AlertTriangle className="w-3 h-3" />
+                      )}
+                      {file.name}
+                    </span>
+                    <span className="text-[10px]">
+                      {file.success ? `${file.count} instruments` : 'FAILED'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
           {/* File Analysis Header */}
           <div className="hud-card p-6 mb-6">
             <div className="hud-card-corners"></div>
@@ -150,35 +338,13 @@ export default function ResultsPage() {
                 </div>
                 <div>
                   <p className="text-[10px] font-mono text-[#7d8590] uppercase tracking-wider">
-                    {data.multipleFiles ? 'FILES ANALYZED' : 'SOURCE FILE'}
+                    {totalFiles > 1 ? 'FILES ANALYZED' : 'SOURCE FILE'}
                   </p>
-                  <p className="text-lg font-mono font-semibold text-[#22c55e]">{data.filename}</p>
+                  <p className="text-lg font-mono font-semibold text-[#22c55e]">
+                    {totalFiles > 1 ? `${totalFiles} files` : data.filename}
+                  </p>
                 </div>
               </div>
-
-              {/* Multi-file Results */}
-              {data.multipleFiles && data.fileResults && (
-                <div className="space-y-2 mb-4">
-                  {data.fileResults.map((result, index) => (
-                    <div
-                      key={index}
-                      className={`flex items-center justify-between p-3 border font-mono text-sm ${
-                        result.success
-                          ? 'bg-[#22c55e]/5 border-[#22c55e]/30 text-[#22c55e]'
-                          : 'bg-[#f85149]/5 border-[#f85149]/30 text-[#f85149]'
-                      }`}
-                    >
-                      <span className="flex items-center gap-2">
-                        <span className={`w-2 h-2 rounded-full ${result.success ? 'bg-[#22c55e]' : 'bg-[#f85149]'}`}></span>
-                        {result.filename}
-                      </span>
-                      <span className="text-xs">
-                        {result.success ? `${result.count} TAGS EXTRACTED` : `ERROR: ${result.error}`}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
 
               <p className="text-sm font-mono text-[#7d8590]">
                 &gt; Click any cell to modify. Use form below to add missing entries.
@@ -277,7 +443,7 @@ export default function ResultsPage() {
                 <span>ANALYSIS SUMMARY</span>
               </div>
 
-              <div className="grid grid-cols-5 gap-4">
+              <div className="grid grid-cols-6 gap-4">
                 <div className="hud-stat-card">
                   <p className="text-3xl font-mono font-bold text-[#22c55e]">{summary.total}</p>
                   <p className="text-[10px] font-mono text-[#7d8590] uppercase tracking-wider mt-1">TOTAL TAGS</p>
@@ -297,6 +463,10 @@ export default function ResultsPage() {
                 <div className="hud-stat-card">
                   <p className="text-3xl font-mono font-bold text-[#a855f7]">{summary.AO}</p>
                   <p className="text-[10px] font-mono text-[#7d8590] uppercase tracking-wider mt-1">ANALOG OUT</p>
+                </div>
+                <div className="hud-stat-card">
+                  <p className="text-3xl font-mono font-bold text-[#eab308]">{summary.COM}</p>
+                  <p className="text-[10px] font-mono text-[#7d8590] uppercase tracking-wider mt-1">COMM</p>
                 </div>
               </div>
             </div>
@@ -328,6 +498,7 @@ export default function ResultsPage() {
                   <option value="DI">DI - DIGITAL INPUT</option>
                   <option value="DO">DO - DIGITAL OUTPUT</option>
                   <option value="AO">AO - ANALOG OUTPUT</option>
+                  <option value="COM">COM - COMMUNICATION</option>
                 </select>
                 <input
                   type="text"
@@ -363,93 +534,104 @@ export default function ResultsPage() {
                     <tr>
                       <th style={{ width: '60px' }}>#</th>
                       <th>TAG ID</th>
-                      <th style={{ width: '140px' }}>SIGNAL</th>
+                      <th style={{ width: '100px' }}>SIGNAL</th>
                       <th>DESCRIPTION</th>
-                      {data.multipleFiles && <th>SOURCE</th>}
+                      <th style={{ width: '180px' }}>SOURCE FILE</th>
                       <th style={{ width: '80px' }}>ACTION</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {instruments.map((instrument, index) => (
-                      <tr key={index}>
-                        <td className="text-[#7d8590] font-mono">{String(index + 1).padStart(3, '0')}</td>
-                        <td>
-                          {editingCell === `${index}-tag` ? (
-                            <input
-                              type="text"
-                              value={instrument.tag}
-                              onChange={(e) => handleCellEdit(index, 'tag', e.target.value)}
-                              onBlur={() => setEditingCell(null)}
-                              autoFocus
-                              className="terminal-input w-full"
-                            />
-                          ) : (
-                            <span
-                              onClick={() => setEditingCell(`${index}-tag`)}
-                              className="cursor-pointer hover:text-[#22c55e] font-mono font-semibold text-[#c9d1d9]"
-                            >
-                              {instrument.tag}
-                            </span>
-                          )}
-                        </td>
-                        <td>
-                          {editingCell === `${index}-signalType` ? (
-                            <select
-                              value={instrument.signalType}
-                              onChange={(e) => handleCellEdit(index, 'signalType', e.target.value)}
-                              onBlur={() => setEditingCell(null)}
-                              autoFocus
-                              className="terminal-select"
-                            >
-                              <option value="AI">AI</option>
-                              <option value="DI">DI</option>
-                              <option value="DO">DO</option>
-                              <option value="AO">AO</option>
-                            </select>
-                          ) : (
-                            <span
-                              onClick={() => setEditingCell(`${index}-signalType`)}
-                              className={`cursor-pointer ${getSignalBadgeClass(instrument.signalType)}`}
-                            >
-                              {instrument.signalType}
-                            </span>
-                          )}
-                        </td>
-                        <td>
-                          {editingCell === `${index}-description` ? (
-                            <input
-                              type="text"
-                              value={instrument.description}
-                              onChange={(e) => handleCellEdit(index, 'description', e.target.value)}
-                              onBlur={() => setEditingCell(null)}
-                              autoFocus
-                              className="terminal-input w-full"
-                            />
-                          ) : (
-                            <span
-                              onClick={() => setEditingCell(`${index}-description`)}
-                              className="cursor-pointer hover:text-[#22c55e] text-[#7d8590]"
-                            >
-                              {instrument.description}
-                            </span>
-                          )}
-                        </td>
-                        {data.multipleFiles && (
-                          <td className="text-[#7d8590] text-xs truncate max-w-[150px]" title={instrument.source}>
-                            {instrument.source || '-'}
+                    {instruments.map((instrument, index) => {
+                      const dupKey = `${instrument.tag}|${instrument.signalType}`;
+                      const isDuplicate = duplicateTags[dupKey] > 1;
+
+                      return (
+                        <tr key={index}>
+                          <td className="text-[#7d8590] font-mono">{String(index + 1).padStart(3, '0')}</td>
+                          <td>
+                            <div className="flex items-center gap-2">
+                              {editingCell === `${index}-tag` ? (
+                                <input
+                                  type="text"
+                                  value={instrument.tag}
+                                  onChange={(e) => handleCellEdit(index, 'tag', e.target.value)}
+                                  onBlur={() => setEditingCell(null)}
+                                  autoFocus
+                                  className="terminal-input w-full"
+                                />
+                              ) : (
+                                <span
+                                  onClick={() => setEditingCell(`${index}-tag`)}
+                                  className="cursor-pointer hover:text-[#22c55e] font-mono font-semibold text-[#c9d1d9]"
+                                >
+                                  {instrument.tag}
+                                </span>
+                              )}
+                              {isDuplicate && (
+                                <span className="px-1.5 py-0.5 text-[8px] font-mono bg-[#f97316]/10 text-[#f97316] border border-[#f97316]/30 rounded whitespace-nowrap">
+                                  DUP
+                                </span>
+                              )}
+                            </div>
                           </td>
-                        )}
-                        <td>
-                          <button
-                            onClick={() => handleDeleteRow(index)}
-                            className="hardware-switch danger"
-                            title="Delete tag"
-                          >
-                            <Trash2 className="w-3 h-3 ml-3" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                          <td>
+                            {editingCell === `${index}-signalType` ? (
+                              <select
+                                value={instrument.signalType}
+                                onChange={(e) => handleCellEdit(index, 'signalType', e.target.value)}
+                                onBlur={() => setEditingCell(null)}
+                                autoFocus
+                                className="terminal-select"
+                              >
+                                <option value="AI">AI</option>
+                                <option value="DI">DI</option>
+                                <option value="DO">DO</option>
+                                <option value="AO">AO</option>
+                                <option value="COM">COM</option>
+                              </select>
+                            ) : (
+                              <span
+                                onClick={() => setEditingCell(`${index}-signalType`)}
+                                className={`cursor-pointer ${getSignalBadgeClass(instrument.signalType)}`}
+                              >
+                                {instrument.signalType}
+                              </span>
+                            )}
+                          </td>
+                          <td>
+                            {editingCell === `${index}-description` ? (
+                              <input
+                                type="text"
+                                value={instrument.description}
+                                onChange={(e) => handleCellEdit(index, 'description', e.target.value)}
+                                onBlur={() => setEditingCell(null)}
+                                autoFocus
+                                className="terminal-input w-full"
+                              />
+                            ) : (
+                              <span
+                                onClick={() => setEditingCell(`${index}-description`)}
+                                className="cursor-pointer hover:text-[#22c55e] text-[#7d8590]"
+                              >
+                                {instrument.description}
+                              </span>
+                            )}
+                          </td>
+                          <td className="text-[#7d8590] text-xs truncate max-w-[180px] font-mono" title={instrument.sourceFile}>
+                            {instrument.sourceFile || '-'}
+                          </td>
+                          <td>
+                            <button
+                              onClick={() => handleDeleteRow(index)}
+                              className="hardware-switch danger"
+                              title="Delete tag"
+                            >
+                              <Trash2 className="w-3 h-3 ml-3" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -458,17 +640,27 @@ export default function ResultsPage() {
 
           {/* Bottom Action Bar */}
           <div className="flex items-center justify-between">
-            <button
-              onClick={handleBackToHome}
-              className="hardware-switch secondary"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              <span className="pl-4">RETURN TO TERMINAL</span>
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleBackToHome}
+                className="hardware-switch secondary"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span className="pl-4">RETURN TO TERMINAL</span>
+              </button>
+              <button
+                onClick={handleAddAnotherPdf}
+                disabled={addingFile}
+                className="hardware-switch secondary"
+              >
+                <Upload className="w-4 h-4" />
+                <span className="pl-2">ADD ANOTHER P&ID</span>
+              </button>
+            </div>
 
             <div className="flex items-center gap-4">
               <span className="font-mono text-[10px] text-[#7d8590] uppercase">
-                {instruments.length} INSTRUMENTS LOADED
+                {instruments.length} INSTRUMENTS FROM {totalFiles} FILE{totalFiles !== 1 ? 'S' : ''}
               </span>
               <button
                 onClick={handleExport}

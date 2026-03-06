@@ -1,30 +1,22 @@
-import { buildLibraryPrompt, validateIOPoint, getEquipmentAliases, isSingleLoopInstrument, getComponentIO } from './instrumentLibrary';
+import { buildLibraryForPrompt } from './ioLibrary';
 
 /**
  * analyzeDrawing.js
  *
  * KEY CHANGE: We no longer send PDFs directly to Claude as documents.
  * Instead we:
- *   1. Convert each PDF page → JPEG image using PDF.js (runs in browser, free)
+ *   1. Convert each PDF page -> JPEG image using PDF.js (runs in browser, free)
  *   2. Send those images to /api/analyze (our Vercel serverless function)
  *   3. The serverless function adds the API key and calls Claude vision
- *
- * Why this works better:
- * - Claude's vision model SEES the drawing like a human engineer would
- * - Instrument bubbles, tag labels, signal lines are all visually recognized
- * - Much higher accuracy than text extraction from PDFs
  */
 
 // ─── PDF.js Setup ────────────────────────────────────────────────────────────
-// We load PDF.js from CDN (free, no install needed)
-// This converts PDF pages into canvas images that Claude can see
 
 let pdfjsLib = null;
 
 async function getPdfjs() {
   if (pdfjsLib) return pdfjsLib;
 
-  // Load PDF.js from CDN if not already loaded
   if (!window.pdfjsLib) {
     await new Promise((resolve, reject) => {
       const script = document.createElement('script');
@@ -34,14 +26,10 @@ async function getPdfjs() {
       script.onerror = reject;
       document.head.appendChild(script);
     });
-
-    // Small delay to ensure module initializes
     await new Promise((r) => setTimeout(r, 300));
   }
 
   pdfjsLib = window.pdfjsLib;
-
-  // Point to the PDF.js worker (required — this does the heavy lifting)
   pdfjsLib.GlobalWorkerOptions.workerSrc =
     'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
 
@@ -50,59 +38,36 @@ async function getPdfjs() {
 
 // ─── Main Export ─────────────────────────────────────────────────────────────
 
-/**
- * Analyzes a P&ID drawing file
- * @param {File} file - PDF, PNG, or JPG file
- * @param {string} template - Template type
- * @returns {Promise<Array>} Extracted I/O list
- */
 export async function analyzeDrawing(file, template = 'isa-5.1') {
   const isPdf = file.type === 'application/pdf';
   const prompt = buildPrompt(template);
 
   console.log(`Starting analysis: ${file.name} (${isPdf ? 'PDF' : 'Image'})`);
 
-  // Step 1: Convert file to array of JPEG base64 images
   let images;
   if (isPdf) {
     images = await pdfToImages(file);
   } else {
-    // For PNG/JPG, just convert directly — no need for PDF.js
     const base64 = await fileToBase64(file);
     images = [base64];
   }
 
   console.log(`Converted to ${images.length} image(s), sending to analysis...`);
 
-  // Step 2: Send to our serverless function (which holds the API key)
   const responseText = await callAnalyzeApi(images, prompt);
-
-  // Step 3: Parse Claude's JSON response into instruments
   return parseClaudeResponse(responseText);
 }
 
-// ─── PDF → Images ────────────────────────────────────────────────────────────
+// ─── PDF -> Images ────────────────────────────────────────────────────────────
 
-/**
- * Converts a PDF file into an array of JPEG base64 strings (one per page)
- * Uses PDF.js to render each page to a canvas, then exports as JPEG
- *
- * @param {File} pdfFile
- * @returns {Promise<string[]>} Array of base64 JPEG strings
- */
 async function pdfToImages(pdfFile) {
   const pdfjs = await getPdfjs();
-
-  // Read the PDF file as ArrayBuffer
   const arrayBuffer = await pdfFile.arrayBuffer();
-
-  // Load the PDF document
   const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
 
   const totalPages = pdf.numPages;
   console.log(`PDF has ${totalPages} page(s)`);
 
-  // Limit to first 5 pages (most P&IDs are 1-2 pages, but let's be safe)
   const pagesToProcess = Math.min(totalPages, 5);
   const images = [];
 
@@ -115,41 +80,26 @@ async function pdfToImages(pdfFile) {
   return images;
 }
 
-/**
- * Renders a single PDF page to a JPEG base64 string
- * Scale 2.0 = 2x resolution — high enough for Claude to read small instrument tags
- */
 async function renderPageToJpeg(pdf, pageNum, scale = 2.0) {
   const page = await pdf.getPage(pageNum);
   const viewport = page.getViewport({ scale });
 
-  // Create an off-screen canvas
   const canvas = document.createElement('canvas');
   canvas.width = viewport.width;
   canvas.height = viewport.height;
 
   const ctx = canvas.getContext('2d');
-
-  // White background (P&IDs are usually on white)
   ctx.fillStyle = 'white';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Render the PDF page onto the canvas
   await page.render({ canvasContext: ctx, viewport }).promise;
 
-  // Export as JPEG (quality 0.85 = good balance of quality vs file size)
   const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-
-  // Strip the "data:image/jpeg;base64," prefix — Claude just needs the raw base64
   return dataUrl.split(',')[1];
 }
 
 // ─── API Call ─────────────────────────────────────────────────────────────────
 
-/**
- * Sends images + prompt to our Vercel serverless function
- * The function is at /api/analyze — it holds the API key server-side
- */
 async function callAnalyzeApi(images, prompt) {
   const response = await fetch('/api/analyze', {
     method: 'POST',
@@ -173,9 +123,6 @@ async function callAnalyzeApi(images, prompt) {
 
 // ─── File Conversion Helpers ──────────────────────────────────────────────────
 
-/**
- * Converts an image file to base64 string
- */
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -187,80 +134,64 @@ function fileToBase64(file) {
 
 // ─── Prompt Builder ───────────────────────────────────────────────────────────
 
-/**
- * Builds the extraction prompt (unchanged from your original — it's good)
- */
 function buildPrompt(template) {
-  let aliasList = '';
-  try {
-    const aliases = getEquipmentAliases();
-    aliasList = Object.entries(aliases)
-      .filter(([alias]) => alias.length <= 30)
-      .slice(0, 20)
-      .map(([alias, key]) => `- "${alias}" → ${key}`)
-      .join('\n');
-  } catch (error) {
-    console.warn('Failed to get equipment aliases:', error);
-    aliasList = '(Alias mapping unavailable)';
-  }
+  const libraryText = buildLibraryForPrompt();
 
-  const basePrompt = `You are an I/O list generator. Your ONLY job is to:
-1. Identify equipment in the P&ID drawing
-2. Match each equipment to its type from the MASTER LIBRARY below
-3. Output the EXACT I/O points from the library for each equipment found
+  return `You are an expert I&C engineer analyzing a P&ID drawing to generate an I/O list.
 
-${buildLibraryPrompt()}
+## YOUR MASTER LIBRARY
+Every component you find MUST be matched against this library. Do not invent signals.
 
-## EQUIPMENT ALIAS MAPPING
+${libraryText}
 
-Common tag patterns and their equipment types:
-${aliasList}
+## HOW TO ANALYZE
 
-## INSTRUCTIONS
+STEP 1 — IDENTIFY every instrument and equipment tag visible in the drawing.
+Examples of tags you'll find: LIT-101, MV-WPS-01, P-WPS-01, PSH-201, TIT-301, UPS-01
 
-1. **IDENTIFY** equipment in the drawing (e.g., "P-WPS-01" is a VFD Pump, "MV-01" is a Motorized Valve, "LIT-101" is a Level Transmitter)
-2. **LOOK UP** the equipment type in the library above (use aliases if needed)
-3. **OUTPUT** I/O points based on equipment type:
-   - **SINGLE-LOOP INSTRUMENTS** (LIT, PIT, FIT, TIT, PSL, PSH, LSL, LSH, etc.): Keep the ORIGINAL tag from the drawing (e.g., "LIT-101" stays "LIT-101", NOT "LI-101")
-   - **MULTI-POINT EQUIPMENT** (Pumps, Valves, Fans, etc.): Append equipment ID to library I/O tag (e.g., "HSR-WPS-01", "HSS-WPS-01")
+STEP 2 — MATCH each tag to the closest COMPONENT in the library above.
+Matching rules:
+- "LIT-101" → matches "LIT" → gives 1 I/O point (WATER LEVEL, AI)
+- "MV-WPS-01" → matches "MV" → gives 6 I/O points (HSC, HSO, ZIC, ZIO, HI, YA)
+- "P-WPS-01" (VFD pump) → matches "HS-DETAIL P1(VFD PUMP)" → gives 19 I/O points
+- "P-WPS-01" (constant speed pump) → matches "HS-DETAIL CP" → gives 7 I/O points
+- "EF-01" (exhaust fan) → matches "HS-DETAIL EF" → gives 6 I/O points
+- If unsure between VFD pump and constant speed pump, use VFD pump
+
+STEP 3 — OUTPUT all I/O points for each matched component.
+
+## TAG FORMATTING RULES
+- Single-loop instruments (LIT, PIT, FIT, TIT, LSL, LSLL, LSH, LSHH, PSL, PSH, AIT, TIT, FS, SOV):
+  Keep the ORIGINAL tag from the drawing exactly as seen.
+  Example: "LIT-101" stays "LIT-101"
+
+- Multi-point equipment (pumps, valves, fans, panels, MCC, UPS, etc.):
+  Format: [I/O TAG FROM LIBRARY]-[EQUIPMENT ID FROM DRAWING]
+  Example: MV-WPS-01 → outputs "HSC-WPS-01", "HSO-WPS-01", "ZIC-WPS-01" etc.
 
 ## OUTPUT FORMAT
-
-Return JSON array. For each I/O point:
-- **tag**:
-  - Single-loop: Keep original tag from drawing (e.g., "LIT-101", "PIT-201")
-  - Multi-point: [Library I/O Tag]-[Equipment ID] (e.g., "HSR-WPS-01", "HSS-WPS-01")
-- **signalType**: EXACTLY as shown in library (AI, DI, DO, AO)
-- **description**: EXACTLY as shown in library - DO NOT MODIFY
-- **location**: Area/location from drawing
-- **equipment**: Equipment type name from library (e.g., "VFD PUMP", "MOTORIZED VALVE", "LEVEL TRANSMITTER")
-- **isAlarm**: true if it's an alarm signal
+Return ONLY a JSON array. Each item must have:
+{
+  "tag": "string — formatted tag as described above",
+  "signalType": "AI | DI | DO | AO | COM",
+  "description": "string — EXACTLY as written in the library, do not modify",
+  "location": "string — area or system from the drawing (e.g. WET PIT, PUMP STATION)",
+  "equipment": "string — component name from library (e.g. VFD PUMP, MOTORIZED VALVE)",
+  "equipmentId": "string — the equipment number from the drawing (e.g. WPS-01, 101)",
+  "sourceFile": ""
+}
 
 ## CRITICAL RULES
+1. ONLY use descriptions from the library — never invent your own
+2. Output ALL I/O points for every equipment found — never skip any
+3. If a component is not in the library, skip it
+4. Return ONLY the JSON array, no other text
 
-1. **USE DESCRIPTIONS EXACTLY** - Copy from library, don't modify
-2. **OUTPUT ALL SIGNALS** - When you find equipment, output ALL its I/O points from the library
-3. **TAG FORMAT** - Single-loop instruments keep original tag; multi-point equipment append ID to I/O tag
-4. **MATCH EQUIPMENT** - Use library equipment names exactly as shown
-
-Return ONLY the JSON array.`;
-
-  if (template === 'dar') {
-    return basePrompt + `\n\n## DAR AL-HANDASAH PROJECT\nFacility types: SPS (sewage), WPS (water), IPS (irrigation)\nUse the MASTER LIBRARY above exactly as written.`;
-  }
-  if (template === 'isa-5.1') {
-    return basePrompt + `\n\n## ISA-5.1 - Additional Notes\nFollow ISA-5.1 tag naming conventions.`;
-  }
-
-  return basePrompt;
+${template === 'dar' ? '\nProject uses Dar Al-Handasah naming: SPS (sewage), WPS (water), IPS (irrigation)' : ''}`;
 }
 
 // ─── Response Parser ──────────────────────────────────────────────────────────
 
-/**
- * Parses Claude's JSON response into instrument objects
- * (Unchanged from your original — the parsing logic is solid)
- */
 function parseClaudeResponse(responseText) {
   try {
     const jsonMatch = responseText.match(/\[[\s\S]*\]/);
@@ -271,10 +202,8 @@ function parseClaudeResponse(responseText) {
       throw new Error('No instruments found in the drawing');
     }
 
-    const validTypes = ['AI', 'DI', 'DO', 'AO'];
+    const validTypes = ['AI', 'DI', 'DO', 'AO', 'COM'];
     const processedInstruments = [];
-    const validationErrors = [];
-    const aliases = getEquipmentAliases();
 
     instruments.forEach((instrument, index) => {
       if (!instrument.tag && !instrument.description) return;
@@ -286,66 +215,22 @@ function parseClaudeResponse(responseText) {
       }
 
       const description = (instrument.description || 'Unknown').toUpperCase().trim();
-      let equipmentType = (instrument.equipment || '').toUpperCase().trim();
+      const equipment = (instrument.equipment || '').toUpperCase().trim();
 
-      if (!equipmentType) {
-        const componentMatch = getComponentIO(tag);
-        if (componentMatch) equipmentType = componentMatch.equipment.toUpperCase();
-      }
-
-      let isValid = true;
-      let validationResult = null;
-
-      if (equipmentType) {
-        let ioTag = tag;
-        if (tag.includes('-')) {
-          const parts = tag.split('-');
-          const componentMatch = getComponentIO(parts[0]);
-          if (componentMatch && !isSingleLoopInstrument(parts[0])) ioTag = parts[0];
-        }
-
-        validationResult = validateIOPoint(equipmentType, ioTag, description);
-
-        if (!validationResult.valid) {
-          isValid = false;
-          validationErrors.push({ tag, equipment: equipmentType, error: validationResult.reason });
-
-          const componentMatch = getComponentIO(tag);
-          if (componentMatch) {
-            const matchingIO = componentMatch.ioPoints.find(
-              (io) =>
-                io.signal.toUpperCase() === description ||
-                io.ioTag.toUpperCase() === ioTag.toUpperCase()
-            );
-            if (matchingIO) {
-              isValid = true;
-              validationResult = { valid: true, ioPoint: matchingIO, component: componentMatch };
-              equipmentType = componentMatch.equipment.toUpperCase();
-            }
-          }
-        } else {
-          equipmentType = validationResult.component.equipment.toUpperCase();
-        }
-      }
-
-      if (isValid || !equipmentType) {
-        processedInstruments.push({
-          tag,
-          signalType,
-          description,
-          location: instrument.location || '',
-          equipment: equipmentType || instrument.equipment || '',
-          isAlarm: instrument.isAlarm ?? validationResult?.ioPoint?.isAlarm ?? false,
-        });
-      }
+      processedInstruments.push({
+        tag,
+        signalType,
+        description,
+        location: instrument.location || '',
+        equipment,
+        equipmentId: instrument.equipmentId || '',
+        sourceFile: instrument.sourceFile || '',
+        isAlarm: instrument.isAlarm || false,
+      });
     });
 
-    if (validationErrors.length > 0) {
-      console.warn(`Validation warnings (${validationErrors.length} items):`, validationErrors);
-    }
-
     if (processedInstruments.length === 0) {
-      throw new Error('No valid instruments after validation');
+      throw new Error('No valid instruments after parsing');
     }
 
     console.log(`Successfully parsed ${processedInstruments.length} I/O points`);
@@ -366,8 +251,9 @@ function inferSignalType(tag, description) {
 
   if (descUpper.includes('START') || descUpper.includes('STOP') || descUpper.includes('COMMAND')) return 'DO';
   if (descUpper.includes('STATUS') || descUpper.includes('FAULT') || descUpper.includes('ALARM') || descUpper.includes('MODE')) return 'DI';
-  if (descUpper.includes('READING') || descUpper.includes('TRANSMITTER')) return 'AI';
-  if (descUpper.includes('SPEED') && descUpper.includes('COMMAND')) return 'AO';
+  if (descUpper.includes('READING') || descUpper.includes('TRANSMITTER') || descUpper.includes('LEVEL') || descUpper.includes('PRESSURE') || descUpper.includes('TEMPERATURE') || descUpper.includes('FLOW')) return 'AI';
+  if (descUpper.includes('SPEED') && descUpper.includes('CONTROL')) return 'AO';
+  if (descUpper.includes('POSITION COMMAND') || descUpper.includes('SETPOINT')) return 'AO';
   if (tagUpper.match(/[FPLT]I?T/) || tagUpper.match(/A[IT]/)) return 'AI';
   if (tagUpper.match(/LS[HL]{0,2}/) || tagUpper.match(/[FPLTA]S[HL]/) || tagUpper.match(/Y[IA]/) || tagUpper.match(/ZS/)) return 'DI';
   if (tagUpper.match(/[FPLT]C?V/) || tagUpper.match(/VFD|VSD/) || tagUpper.match(/[FPLT]Y/)) return 'AO';
@@ -382,12 +268,13 @@ export function mockAnalyzeDrawing(file, template = 'isa-5.1') {
   return new Promise((resolve) => {
     setTimeout(() => {
       const mockInstruments = [
-        { tag: 'LIT-101', signalType: 'AI', description: 'WATER LEVEL', location: 'SUMP PIT', equipment: 'LEVEL TRANSMITTER', isAlarm: false },
-        { tag: 'LSLL-101', signalType: 'DI', description: 'LOW LOW LEVEL SWITCH', location: 'SUMP PIT', equipment: 'LEVEL SWITCH', isAlarm: true },
-        { tag: 'LSH-101', signalType: 'DI', description: 'HIGH LEVEL SWITCH', location: 'SUMP PIT', equipment: 'LEVEL SWITCH', isAlarm: true },
-        { tag: 'HSR-WPS-01', signalType: 'DO', description: 'START', location: 'WET PIT', equipment: 'VFD PUMP', isAlarm: false },
-        { tag: 'HSS-WPS-01', signalType: 'DO', description: 'STOP', location: 'WET PIT', equipment: 'VFD PUMP', isAlarm: false },
-        { tag: 'SC-WPS-01', signalType: 'AO', description: 'SPEED CONTROL', location: 'WET PIT', equipment: 'VFD PUMP', isAlarm: false },
+        { tag: 'LIT-101', signalType: 'AI', description: 'WATER LEVEL', location: 'SUMP PIT', equipment: 'LIT', equipmentId: '101', sourceFile: '', isAlarm: false },
+        { tag: 'LALL-101', signalType: 'DI', description: 'LEVEL SWITCH LOW LOW', location: 'SUMP PIT', equipment: 'LSLL', equipmentId: '101', sourceFile: '', isAlarm: true },
+        { tag: 'LAH-101', signalType: 'DI', description: 'LEVEL SWITCH HIGH', location: 'SUMP PIT', equipment: 'LSH', equipmentId: '101', sourceFile: '', isAlarm: true },
+        { tag: 'HSR-WPS-01', signalType: 'DO', description: 'START', location: 'WET PIT', equipment: 'VFD PUMP', equipmentId: 'WPS-01', sourceFile: '', isAlarm: false },
+        { tag: 'HSS-WPS-01', signalType: 'DO', description: 'STOP', location: 'WET PIT', equipment: 'VFD PUMP', equipmentId: 'WPS-01', sourceFile: '', isAlarm: false },
+        { tag: 'SC-WPS-01', signalType: 'AO', description: 'SPEED CONTROL', location: 'WET PIT', equipment: 'VFD PUMP', equipmentId: 'WPS-01', sourceFile: '', isAlarm: false },
+        { tag: 'HSO-WPS-01', signalType: 'COM', description: 'OPEN MOTOR STARTER', location: 'WET PIT', equipment: 'VFD PUMP', equipmentId: 'WPS-01', sourceFile: '', isAlarm: false },
       ];
       resolve(mockInstruments);
     }, 2500);

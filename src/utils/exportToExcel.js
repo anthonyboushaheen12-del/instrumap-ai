@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { getComponentIO, normalizeKey } from './instrumentLibrary';
+import { lookupComponent } from './ioLibrary';
 
 /**
  * Extract location from instrument tag using library when possible
@@ -49,19 +49,18 @@ function extractEquipment(tag, providedEquipment, description) {
   }
 
   // Try to match using library
-  const normalizedTag = normalizeKey(tag);
-  const componentMatch = getComponentIO(normalizedTag);
+  const componentMatch = lookupComponent(tag);
 
   if (componentMatch) {
-    return componentMatch.equipment;
+    return componentMatch.componentTag;
   }
 
   // Try matching by prefix (for multi-point equipment)
   const tagParts = tag.split('-');
   if (tagParts.length > 1) {
-    const prefixMatch = getComponentIO(tagParts[0]);
+    const prefixMatch = lookupComponent(tagParts[0]);
     if (prefixMatch) {
-      return prefixMatch.equipment;
+      return prefixMatch.componentTag;
     }
     // For single-loop instruments, use the tag prefix as equipment name
     const prefix = tagParts[0].toUpperCase();
@@ -284,6 +283,7 @@ export function exportToExcelWithSummary(instruments, filename, summary, pidDeta
   summaryData.push(['DI (Digital Input)', summary.DI || 0]);
   summaryData.push(['DO (Digital Output)', summary.DO || 0]);
   summaryData.push(['AO (Analog Output)', summary.AO || 0]);
+  summaryData.push(['COM (Communication)', summary.COM || 0]);
 
   // Add Equipment List if provided
   if (pidDetails && pidDetails.equipmentList) {
@@ -351,6 +351,7 @@ export function calculateSummary(instruments) {
     DI: 0,
     DO: 0,
     AO: 0,
+    COM: 0,
   };
 
   instruments.forEach(instrument => {

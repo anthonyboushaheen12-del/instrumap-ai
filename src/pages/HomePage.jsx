@@ -325,7 +325,7 @@ export default function HomePage() {
     setAnalyzingRefIndex(index);
     setError(null);
     try {
-      const useMock = !import.meta.env.VITE_OPENROUTER_API_KEY && !import.meta.env.VITE_GEMINI_API_KEY && !import.meta.env.VITE_ANTHROPIC_API_KEY;
+      const useMock = import.meta.env.VITE_USE_MOCK === 'true';
       const instruments = useMock
         ? await mockAnalyzeDrawing(refFile.file, template)
         : await analyzeDrawing(refFile.file, template);
@@ -364,7 +364,7 @@ export default function HomePage() {
     setAnalysisProgress({ current: 0, total: files.length });
 
     try {
-      const useMock = !import.meta.env.VITE_OPENROUTER_API_KEY && !import.meta.env.VITE_GEMINI_API_KEY && !import.meta.env.VITE_ANTHROPIC_API_KEY;
+      const useMock = import.meta.env.VITE_USE_MOCK === 'true';
       const allInstruments = [];
       const fileResults = [];
 

@@ -893,6 +893,13 @@ textarea:focus-visible {
 }
 .signal-badge.ao::before { background: #a855f7; box-shadow: 0 0 8px #a855f7; }
 
+.signal-badge.com {
+  background: rgba(234, 179, 8, 0.1);
+  border-color: #eab308;
+  color: #eab308;
+}
+.signal-badge.com::before { background: #eab308; box-shadow: 0 0 8px #eab308; }
+
 /* Terminal section header */
 .terminal-header {
   display: flex;
