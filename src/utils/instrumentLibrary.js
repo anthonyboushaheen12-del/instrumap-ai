@@ -263,6 +263,46 @@ function normalizeIoType(value) {
   return normalized || 'COM';
 }
 
+/**
+ * Map COM/COMMUNICATION INTERFACE entries to functional I/O type
+ * based on the I/O tag prefix and description
+ */
+function getFunctionalIoType(ioTag, description, originalType) {
+  if (['AI', 'DI', 'DO', 'AO'].includes(originalType)) {
+    return originalType;
+  }
+
+  const tag = (ioTag || '').toUpperCase().trim();
+  const desc = (description || '').toUpperCase();
+
+  // Commands sent TO device (Digital Output)
+  if ((tag.startsWith('HS') || tag.startsWith('HC')) &&
+      (desc.includes('OPEN') || desc.includes('CLOSE') || desc.includes('START') ||
+       desc.includes('STOP') || desc.includes('ENABLE') || desc.includes('DISABLE') ||
+       desc.includes('ON/OFF') || desc.includes('ON') || desc.includes('OFF'))) {
+    return 'DO';
+  }
+  if (tag.startsWith('HA') && (desc.includes('MODE') || desc.includes('OFF'))) {
+    return 'DO';
+  }
+
+  // Setpoint / control outputs (Analog Output)
+  if (tag.startsWith('SC') || tag.startsWith('TC') || tag.startsWith('ZC') ||
+      desc.includes('SETPOINT') || desc.includes('COMMAND')) {
+    return 'AO';
+  }
+
+  // Analog readings (Analog Input)
+  if (tag.startsWith('SI') || tag.startsWith('II') || tag.startsWith('NI') ||
+      tag.startsWith('TI') || tag.startsWith('VI') || tag.startsWith('FI') ||
+      tag.startsWith('PI') || tag.startsWith('LI')) {
+    return 'AI';
+  }
+
+  // Default: status, alarms, indications, switches → Digital Input
+  return 'DI';
+}
+
 function isAlarmSignal(description, ioTag) {
   const desc = (description || '').toUpperCase();
   const tag = (ioTag || '').toUpperCase();
@@ -314,10 +354,12 @@ function buildLibraryFromCsv(csvText) {
       library[equipmentKey] = library[primaryKey];
     }
 
+    const functionalType = getFunctionalIoType(ioTag, description, ioType);
     library[primaryKey].ioPoints.push({
       ioTag,
       signal: description || ioTag,
       ioType,
+      functionalIoType: functionalType,
       isAlarm: isAlarmSignal(description, ioTag),
     });
   });
@@ -486,7 +528,6 @@ export function validateIOPoint(equipmentType, ioTag, description) {
 
 export function buildLibraryPrompt() {
   try {
-    const visibleIoTypes = new Set(['AI', 'DI', 'DO', 'AO']);
     const lines = [];
 
     lines.push('## MASTER I/O LIBRARY (USE EXACTLY AS WRITTEN)');
@@ -499,7 +540,7 @@ export function buildLibraryPrompt() {
       lines.push('*Library is empty - please check library initialization*');
       return lines.join('\n');
     }
-    
+
     entries.sort(([keyA], [keyB]) => keyA.localeCompare(keyB));
 
     // Separate single-loop instruments from multi-point equipment
@@ -507,9 +548,10 @@ export function buildLibraryPrompt() {
     const multiPointEquipment = [];
 
     for (const [key, component] of entries) {
-      const ioPoints = component.ioPoints.filter(io => io.ioTag && visibleIoTypes.has(io.ioType));
+      // Include all I/O points that have a tag (use functionalIoType for COM entries)
+      const ioPoints = component.ioPoints.filter(io => io.ioTag);
       if (ioPoints.length === 0) continue;
-      
+
       if (isSingleLoopInstrument(key)) {
         singleLoopInstruments.push([key, component, ioPoints]);
       } else {
@@ -519,14 +561,14 @@ export function buildLibraryPrompt() {
 
     // Single-loop instruments section
     if (singleLoopInstruments.length > 0) {
-      lines.push('### SINGLE-LOOP INSTRUMENTS (Keep original tag from drawing)');
+      lines.push('### SINGLE-LOOP INSTRUMENTS (Keep original tag from drawing, use component tag as equipment name)');
       lines.push('| Component Tag | I/O Tag | I/O Type | Description (USE EXACTLY) |');
       lines.push('|---------------|---------|----------|---------------------------|');
-      
+
       for (const [key, component, ioPoints] of singleLoopInstruments) {
         for (const io of ioPoints) {
           const componentTag = key.replace(/-/g, '');
-          lines.push(`| ${componentTag} | ${io.ioTag} | ${io.ioType} | ${io.signal} |`);
+          lines.push(`| ${componentTag} | ${io.ioTag} | ${io.functionalIoType} | ${io.signal} |`);
         }
       }
       lines.push('');
@@ -535,15 +577,15 @@ export function buildLibraryPrompt() {
     // Multi-point equipment section
     if (multiPointEquipment.length > 0) {
       lines.push('### MULTI-POINT EQUIPMENT (Append equipment ID to I/O tag)');
-      
+
       for (const [key, component, ioPoints] of multiPointEquipment) {
         const title = component.equipment ? `${component.equipment} (${key})` : key;
-        lines.push(`#### ${title}`);
+        lines.push(`#### ${title} — ${ioPoints.length} I/O points`);
         lines.push('| I/O Tag | I/O Type | Description (USE EXACTLY) |');
         lines.push('|---------|----------|---------------------------|');
 
         for (const io of ioPoints) {
-          lines.push(`| ${io.ioTag} | ${io.ioType} | ${io.signal} |`);
+          lines.push(`| ${io.ioTag} | ${io.functionalIoType} | ${io.signal} |`);
         }
 
         lines.push('');

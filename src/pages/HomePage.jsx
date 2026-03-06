@@ -1,14 +1,18 @@
-import { useState } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Upload, FileText, X, Info,
   ChevronDown, ChevronUp, Loader2, Shield,
-  Cpu, Zap, Eye, Check, FileImage
+  Cpu, Zap, Eye, Check, FileImage,
+  ChevronLeft, ChevronRight
 } from 'lucide-react';
 import Header from '../components/Header';
 import LoadingOverlay from '../components/LoadingOverlay';
 import { analyzeDrawing, mockAnalyzeDrawing } from '../utils/analyzeDrawing';
 import { saveAnalysisData } from '../utils/storage';
+import { validateFiles } from '../utils/fileValidator';
+import { createErrorNotification, logError } from '../utils/errorHandler';
+import ErrorMessage from '../components/ErrorMessage';
 
 // Template options
 const TEMPLATE_OPTIONS = [
@@ -39,6 +43,110 @@ export default function HomePage() {
     referenceFiles: []
   });
   const [analyzingRefIndex, setAnalyzingRefIndex] = useState(null);
+  const [selectedFileIndex, setSelectedFileIndex] = useState(0);
+  const [pdfPageNum, setPdfPageNum] = useState(1);
+  const [pdfTotalPages, setPdfTotalPages] = useState(0);
+  const [pdfRendering, setPdfRendering] = useState(false);
+  const pdfCanvasRef = useRef(null);
+  const pdfDocRef = useRef(null);
+  const pdfjsLibRef = useRef(null);
+
+  // Load PDF.js from CDN
+  const loadPdfjs = useCallback(async () => {
+    if (pdfjsLibRef.current) return pdfjsLibRef.current;
+
+    // Check if already loaded globally
+    if (window.pdfjsLib) {
+      pdfjsLibRef.current = window.pdfjsLib;
+      pdfjsLibRef.current.GlobalWorkerOptions.workerSrc =
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
+      return pdfjsLibRef.current;
+    }
+
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs';
+      script.type = 'module';
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+    await new Promise((r) => setTimeout(r, 300));
+
+    pdfjsLibRef.current = window.pdfjsLib;
+    pdfjsLibRef.current.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
+    return pdfjsLibRef.current;
+  }, []);
+
+  // Render a specific PDF page to the canvas
+  const renderPdfPage = useCallback(async (pdf, pageNum) => {
+    const canvas = pdfCanvasRef.current;
+    if (!canvas || !pdf) return;
+
+    setPdfRendering(true);
+    try {
+      const page = await pdf.getPage(pageNum);
+      const scale = 1.5;
+      const viewport = page.getViewport({ scale });
+
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      await page.render({ canvasContext: ctx, viewport }).promise;
+    } finally {
+      setPdfRendering(false);
+    }
+  }, []);
+
+  // Load and display a PDF file
+  const loadPdfPreview = useCallback(async (file) => {
+    try {
+      setPdfRendering(true);
+      const pdfjs = await loadPdfjs();
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+
+      pdfDocRef.current = pdf;
+      setPdfTotalPages(pdf.numPages);
+      setPdfPageNum(1);
+      await renderPdfPage(pdf, 1);
+    } catch (err) {
+      console.error('PDF preview error:', err);
+      setPdfRendering(false);
+    }
+  }, [loadPdfjs, renderPdfPage]);
+
+  // Handle page navigation
+  const goToPdfPage = useCallback(async (newPage) => {
+    if (!pdfDocRef.current || newPage < 1 || newPage > pdfTotalPages) return;
+    setPdfPageNum(newPage);
+    await renderPdfPage(pdfDocRef.current, newPage);
+  }, [pdfTotalPages, renderPdfPage]);
+
+  // When selected file changes, update preview
+  useEffect(() => {
+    const file = files[selectedFileIndex];
+    if (!file) {
+      setPreviewUrl(null);
+      pdfDocRef.current = null;
+      setPdfTotalPages(0);
+      return;
+    }
+
+    if (file.type === 'application/pdf') {
+      setPreviewUrl(null);
+      loadPdfPreview(file);
+    } else if (file.type.startsWith('image/')) {
+      pdfDocRef.current = null;
+      setPdfTotalPages(0);
+      setPreviewUrl(URL.createObjectURL(file));
+      return () => URL.revokeObjectURL(previewUrl);
+    }
+  }, [selectedFileIndex, files]);
 
   const handleDrag = (e) => {
     e.preventDefault();
@@ -66,39 +174,25 @@ export default function HomePage() {
   };
 
   const handleFileSelect = (selectedFiles) => {
-    const validTypes = ['application/pdf', 'image/png', 'image/jpeg', 'image/jpg'];
-    const validFiles = [];
-    const errors = [];
+    const validation = validateFiles(selectedFiles);
 
-    selectedFiles.forEach(file => {
-      if (!validTypes.includes(file.type)) {
-        errors.push(`${file.name}: Invalid file type`);
-        return;
-      }
-      if (file.size > 10 * 1024 * 1024) {
-        errors.push(`${file.name}: File size must be less than 10MB`);
-        return;
-      }
-      validFiles.push(file);
-    });
-
-    if (errors.length > 0) {
-      setError(errors.join(', '));
+    if (validation.errors.length > 0) {
+      setError({
+        title: 'Invalid Files',
+        message: validation.errors.join('\n'),
+        technicalDetails: null
+      });
     } else {
       setError(null);
     }
 
-    setFiles(prevFiles => [...prevFiles, ...validFiles]);
-
-    // Create preview for first image file
-    if (validFiles.length > 0) {
-      const firstFile = validFiles[0];
-      if (firstFile.type.startsWith('image/')) {
-        const url = URL.createObjectURL(firstFile);
-        setPreviewUrl(url);
-      } else {
-        setPreviewUrl(null);
-      }
+    if (validation.validFiles.length > 0) {
+      setFiles(prevFiles => {
+        const newFiles = [...prevFiles, ...validation.validFiles];
+        // Select the first new file
+        setSelectedFileIndex(prevFiles.length);
+        return newFiles;
+      });
     }
   };
 
@@ -106,7 +200,14 @@ export default function HomePage() {
     setFiles(prevFiles => {
       const newFiles = prevFiles.filter((_, i) => i !== index);
       if (newFiles.length === 0) {
+        setSelectedFileIndex(0);
         setPreviewUrl(null);
+        pdfDocRef.current = null;
+        setPdfTotalPages(0);
+      } else if (selectedFileIndex >= newFiles.length) {
+        setSelectedFileIndex(newFiles.length - 1);
+      } else if (index < selectedFileIndex) {
+        setSelectedFileIndex(prev => prev - 1);
       }
       return newFiles;
     });
@@ -123,7 +224,7 @@ export default function HomePage() {
       const isPdf = file.type === 'application/pdf';
       const isDwg = file.name.toLowerCase().endsWith('.dwg');
       if (!isPdf && !isDwg) {
-        setError(`${file.name}: Only PDF and DWG files are allowed`);
+        setError({ title: 'Invalid File Type', message: `${file.name}: Only PDF and DWG files are allowed` });
         return;
       }
       const fileRef = {
@@ -150,7 +251,7 @@ export default function HomePage() {
   const analyzeReferenceFile = async (index) => {
     const refFile = pidDetails.referenceFiles[index];
     if (!refFile || !refFile.file) {
-      setError('Cannot analyze this file');
+      setError({ title: 'Analysis Error', message: 'Cannot analyze this file.' });
       return;
     }
     setAnalyzingRefIndex(index);
@@ -170,7 +271,8 @@ export default function HomePage() {
         })
       }));
     } catch (err) {
-      setError(`Failed to analyze ${refFile.name}: ${err.message}`);
+      logError(err, { context: 'reference-analysis', fileName: refFile.name });
+      setError(createErrorNotification(err, 'analysis'));
     } finally {
       setAnalyzingRefIndex(null);
     }
@@ -178,9 +280,17 @@ export default function HomePage() {
 
   const handleUploadAndAnalyze = async () => {
     if (files.length === 0) {
-      setError('Please select at least one file');
+      setError({ title: 'No Files', message: 'Please select at least one file.' });
       return;
     }
+
+    // Re-validate all files before analysis
+    const validation = validateFiles(files);
+    if (!validation.valid) {
+      setError({ title: 'Invalid Files', message: 'No valid files to analyze:\n' + validation.errors.join('\n') });
+      return;
+    }
+
     setAnalyzing(true);
     setError(null);
     setAnalysisProgress({ current: 0, total: files.length });
@@ -250,7 +360,8 @@ export default function HomePage() {
       saveAnalysisData(analysisData);
       navigate('/results', { state: analysisData });
     } catch (err) {
-      setError(err.message || 'Failed to analyze drawings.');
+      logError(err, { context: 'analysis', fileCount: files.length, template });
+      setError(createErrorNotification(err, 'analysis'));
     } finally {
       setAnalyzing(false);
       setAnalysisProgress({ current: 0, total: 0 });
@@ -261,6 +372,7 @@ export default function HomePage() {
     <div className="h-screen flex flex-col bg-[#0d1117] overflow-hidden">
       <Header />
       {analyzing && <LoadingOverlay />}
+      <ErrorMessage error={typeof error === 'object' ? error : null} onClose={() => setError(null)} />
 
       {/* Main Content - Two Column Layout */}
       <main className="flex-1 pt-16 flex overflow-hidden">
@@ -345,7 +457,7 @@ export default function HomePage() {
                       + ADD
                     </label>
                     <button
-                      onClick={() => { setFiles([]); setPreviewUrl(null); }}
+                      onClick={() => { setFiles([]); setPreviewUrl(null); setSelectedFileIndex(0); pdfDocRef.current = null; setPdfTotalPages(0); }}
                       className="px-2 py-1 text-xs font-mono text-red-400 hover:text-red-300"
                     >
                       CLEAR
@@ -361,13 +473,9 @@ export default function HomePage() {
                       <div
                         key={index}
                         className={`relative p-2 rounded border cursor-pointer transition-all ${
-                          previewUrl && index === 0 ? 'border-[#22c55e] bg-[#22c55e]/10' : 'border-[#30363d] bg-[#21262d] hover:border-[#7d8590]'
+                          index === selectedFileIndex ? 'border-[#22c55e] bg-[#22c55e]/10' : 'border-[#30363d] bg-[#21262d] hover:border-[#7d8590]'
                         }`}
-                        onClick={() => {
-                          if (file.type.startsWith('image/')) {
-                            setPreviewUrl(URL.createObjectURL(file));
-                          }
-                        }}
+                        onClick={() => setSelectedFileIndex(index)}
                       >
                         <div className="aspect-square bg-[#0d1117] rounded flex items-center justify-center mb-1">
                           {file.type.startsWith('image/') ? (
@@ -388,14 +496,50 @@ export default function HomePage() {
                   </div>
 
                   {/* Main Preview */}
-                  <div className="flex-1 bg-[#0d1117] rounded border border-[#30363d] flex items-center justify-center overflow-hidden">
-                    {previewUrl ? (
-                      <img src={previewUrl} alt="Preview" className="max-w-full max-h-full object-contain" />
-                    ) : (
-                      <div className="text-center p-8">
-                        <Eye className="w-12 h-12 text-[#30363d] mx-auto mb-3" />
-                        <p className="text-[#7d8590] text-sm">Select an image to preview</p>
-                        <p className="text-[#484f58] text-xs mt-1">PDF preview not available</p>
+                  <div className="flex-1 bg-[#0d1117] rounded border border-[#30363d] flex flex-col overflow-hidden">
+                    {/* Preview Content */}
+                    <div className="flex-1 flex items-center justify-center overflow-auto relative">
+                      {pdfRendering && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-[#0d1117]/80 z-10">
+                          <div className="flex flex-col items-center gap-2">
+                            <Loader2 className="w-8 h-8 text-[#22c55e] animate-spin" />
+                            <span className="text-xs font-mono text-[#7d8590]">Rendering...</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {previewUrl ? (
+                        <img src={previewUrl} alt="Preview" className="max-w-full max-h-full object-contain" />
+                      ) : pdfTotalPages > 0 ? (
+                        <canvas ref={pdfCanvasRef} className="max-w-full max-h-full object-contain" />
+                      ) : (
+                        <div className="text-center p-8">
+                          <Eye className="w-12 h-12 text-[#30363d] mx-auto mb-3" />
+                          <p className="text-[#7d8590] text-sm">Select a file to preview</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* PDF Page Navigation */}
+                    {pdfTotalPages > 1 && (
+                      <div className="flex items-center justify-center gap-3 py-2 px-3 border-t border-[#30363d] bg-[#161b22]">
+                        <button
+                          onClick={() => goToPdfPage(pdfPageNum - 1)}
+                          disabled={pdfPageNum <= 1 || pdfRendering}
+                          className="p-1 rounded hover:bg-[#21262d] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        >
+                          <ChevronLeft className="w-4 h-4 text-[#c9d1d9]" />
+                        </button>
+                        <span className="text-xs font-mono text-[#7d8590]">
+                          Page <span className="text-[#c9d1d9]">{pdfPageNum}</span> / {pdfTotalPages}
+                        </span>
+                        <button
+                          onClick={() => goToPdfPage(pdfPageNum + 1)}
+                          disabled={pdfPageNum >= pdfTotalPages || pdfRendering}
+                          className="p-1 rounded hover:bg-[#21262d] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                        >
+                          <ChevronRight className="w-4 h-4 text-[#c9d1d9]" />
+                        </button>
                       </div>
                     )}
                   </div>
@@ -572,8 +716,8 @@ export default function HomePage() {
               )}
             </div>
 
-            {/* Error Display */}
-            {error && (
+            {/* Error Display (inline fallback for string errors) */}
+            {error && typeof error === 'string' && (
               <div className="p-2 bg-red-500/10 border border-red-500/30 rounded text-red-400 text-xs font-mono">
                 {error}
               </div>

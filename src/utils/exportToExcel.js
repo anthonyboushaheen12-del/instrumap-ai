@@ -39,15 +39,19 @@ function extractLocation(tag, providedLocation, equipmentType) {
  * Extract equipment type from instrument tag using library
  */
 function extractEquipment(tag, providedEquipment, description) {
-  // Use provided equipment if available
+  // Use provided equipment if available, unless it's a generic label
   if (providedEquipment && providedEquipment.trim()) {
-    return providedEquipment.trim();
+    const upper = providedEquipment.trim().toUpperCase();
+    // If the AI returned a generic label, try to resolve to the actual instrument tag
+    if (upper !== 'INSTRUMENTATION' && upper !== 'INSTRUMENT' && upper !== 'UNKNOWN') {
+      return providedEquipment.trim();
+    }
   }
 
   // Try to match using library
   const normalizedTag = normalizeKey(tag);
   const componentMatch = getComponentIO(normalizedTag);
-  
+
   if (componentMatch) {
     return componentMatch.equipment;
   }
@@ -59,15 +63,43 @@ function extractEquipment(tag, providedEquipment, description) {
     if (prefixMatch) {
       return prefixMatch.equipment;
     }
+    // For single-loop instruments, use the tag prefix as equipment name
+    const prefix = tagParts[0].toUpperCase();
+    const singleLoopTags = ['LIT', 'PIT', 'FIT', 'TIT', 'AIT', 'LSL', 'LSLL', 'LSH', 'LSHH', 'PSL', 'PSH', 'FS', 'SOV'];
+    if (singleLoopTags.includes(prefix)) {
+      return prefix;
+    }
   }
 
   // Fallback to heuristics for common patterns
   const tagUpper = tag.toUpperCase();
 
-  // Level instruments
-  if (tagUpper.match(/^LIT|^LT/)) return 'LEVEL TRANSMITTER';
-  if (tagUpper.match(/^LS[HL]{0,2}/)) return 'LEVEL SWITCH';
-  if (tagUpper.match(/^LA[HL]{0,2}/)) return 'LEVEL SWITCH';
+  // Level instruments - return component tag prefix
+  if (tagUpper.match(/^LIT/)) return 'LIT';
+  if (tagUpper.match(/^LT/)) return 'LT';
+  if (tagUpper.match(/^LSLL/)) return 'LSLL';
+  if (tagUpper.match(/^LSHH/)) return 'LSHH';
+  if (tagUpper.match(/^LSL/)) return 'LSL';
+  if (tagUpper.match(/^LSH/)) return 'LSH';
+  if (tagUpper.match(/^LA/)) return tag.split('-')[0] || 'LA';
+
+  // Pressure instruments
+  if (tagUpper.match(/^PIT/)) return 'PIT';
+  if (tagUpper.match(/^PT/)) return 'PT';
+  if (tagUpper.match(/^PSH/)) return 'PSH';
+  if (tagUpper.match(/^PSL/)) return 'PSL';
+
+  // Flow instruments
+  if (tagUpper.match(/^FIT/)) return 'FIT';
+  if (tagUpper.match(/^FT/)) return 'FT';
+  if (tagUpper.match(/^FS/)) return 'FS';
+
+  // Temperature instruments
+  if (tagUpper.match(/^TIT/)) return 'TIT';
+  if (tagUpper.match(/^TT/)) return 'TT';
+
+  // Analyzers
+  if (tagUpper.match(/^AIT/)) return 'AIT';
 
   // Pumps
   if (tagUpper.includes('SPS') || (tagUpper.includes('PUMP') && tagUpper.includes('SUMP'))) {
@@ -78,44 +110,25 @@ function extractEquipment(tag, providedEquipment, description) {
   // OCU
   if (tagUpper.includes('OCU')) return 'ODOR CONTROL UNIT';
 
-  // Gas monitoring
-  if (tagUpper.includes('H2S') || tagUpper.match(/^AIT/)) {
-    if (description && description.toUpperCase().includes('H2S')) {
-      return 'H2S ANALYZER';
-    }
-    return 'CONDUCTIVITY ANALYZER';
-  }
-
   // UPS
   if (tagUpper.includes('UPS')) return 'UPS';
 
-  // Pressure
-  if (tagUpper.match(/^PIT|^PT/)) return 'PRESSURE TRANSMITTER';
-  if (tagUpper.match(/^PS[HL]/)) return 'PRESSURE SWITCH';
-
-  // Flow
-  if (tagUpper.match(/^FIT|^FT/)) return 'FLOW TRANSMITTER';
-  if (tagUpper.match(/^FS/)) return 'FLOW SWITCH';
-
-  // Temperature
-  if (tagUpper.match(/^TIT|^TT/)) return 'TEMPERATURE TRANSMITTER';
-
   // Valves
   if (tagUpper.match(/^ZS/)) return 'VALVE POSITION SWITCH';
-  if (tagUpper.match(/^XV|^SOV/)) return 'SOLENOID VALVE';
+  if (tagUpper.match(/^XV|^SOV/)) return 'SOV';
   if (tagUpper.match(/^FV|^FCV/)) return 'FLOW CONTROL VALVE';
-  if (tagUpper.match(/^MV/)) return 'MOTORIZED VALVE';
+  if (tagUpper.match(/^MV/)) return 'MV';
 
   // Motors/Fans
   if (tagUpper.match(/^M-/)) return 'MOTOR';
   if (tagUpper.includes('EF') || tagUpper.includes('EXHAUST')) return 'EXHAUST FAN';
   if (tagUpper.includes('SF') || tagUpper.includes('SUPPLY')) return 'SUPPLY FAN';
 
-  // Status/Alarms
-  if (tagUpper.match(/^YI/)) return 'STATUS INDICATOR';
-  if (tagUpper.match(/^YA/)) return 'ALARM INDICATOR';
+  // Status/Alarms - use the tag itself
+  if (tagUpper.match(/^YI/)) return tag.split('-')[0] || 'YI';
+  if (tagUpper.match(/^YA/)) return tag.split('-')[0] || 'YA';
 
-  return 'INSTRUMENT';
+  return tag.split('-')[0] || 'INSTRUMENT';
 }
 
 /**
