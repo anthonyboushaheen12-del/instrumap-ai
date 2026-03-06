@@ -47,15 +47,16 @@ export default function HomePage() {
   const [pdfPageNum, setPdfPageNum] = useState(1);
   const [pdfTotalPages, setPdfTotalPages] = useState(0);
   const [pdfRendering, setPdfRendering] = useState(false);
-  const pdfCanvasRef = useRef(null);
+  const [pdfPreviewSrc, setPdfPreviewSrc] = useState(null);
   const pdfDocRef = useRef(null);
   const pdfjsLibRef = useRef(null);
+  // Cache: Map<string, Map<number, string>> — fileKey → (pageNum → dataURL)
+  const pdfPageCacheRef = useRef(new Map());
 
   // Load PDF.js from CDN
   const loadPdfjs = useCallback(async () => {
     if (pdfjsLibRef.current) return pdfjsLibRef.current;
 
-    // Check if already loaded globally
     if (window.pdfjsLib) {
       pdfjsLibRef.current = window.pdfjsLib;
       pdfjsLibRef.current.GlobalWorkerOptions.workerSrc =
@@ -79,33 +80,65 @@ export default function HomePage() {
     return pdfjsLibRef.current;
   }, []);
 
-  // Render a specific PDF page to the canvas
-  const renderPdfPage = useCallback(async (pdf, pageNum) => {
-    const canvas = pdfCanvasRef.current;
-    if (!canvas || !pdf) return;
+  // Get a stable cache key for a file
+  const getFileCacheKey = useCallback((file) => `${file.name}_${file.size}_${file.lastModified}`, []);
 
-    setPdfRendering(true);
-    try {
-      const page = await pdf.getPage(pageNum);
-      const scale = 1.5;
-      const viewport = page.getViewport({ scale });
+  // Render a single page to a dataURL string (off-screen), returns cached if available
+  const renderPageToDataUrl = useCallback(async (pdf, pageNum, cacheKey) => {
+    const fileCache = pdfPageCacheRef.current.get(cacheKey);
+    if (fileCache?.has(pageNum)) return fileCache.get(pageNum);
 
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = 'white';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const page = await pdf.getPage(pageNum);
+    const viewport = page.getViewport({ scale: 0.8 });
 
-      await page.render({ canvasContext: ctx, viewport }).promise;
-    } finally {
-      setPdfRendering(false);
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport }).promise;
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+
+    if (!pdfPageCacheRef.current.has(cacheKey)) {
+      pdfPageCacheRef.current.set(cacheKey, new Map());
     }
+    pdfPageCacheRef.current.get(cacheKey).set(pageNum, dataUrl);
+
+    return dataUrl;
   }, []);
 
-  // Load and display a PDF file
-  const loadPdfPreview = useCallback(async (file) => {
+  // Load a PDF and render page 1 into cache (called eagerly on file add)
+  const preloadPdf = useCallback(async (file) => {
+    const cacheKey = getFileCacheKey(file);
+    // Already cached page 1 — nothing to do
+    if (pdfPageCacheRef.current.get(cacheKey)?.has(1)) return;
+
     try {
+      const pdfjs = await loadPdfjs();
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+      await renderPageToDataUrl(pdf, 1, cacheKey);
+    } catch (err) {
+      console.error('PDF preload error:', err);
+    }
+  }, [loadPdfjs, getFileCacheKey, renderPageToDataUrl]);
+
+  // Load and display a PDF file for the selected file
+  const loadPdfPreview = useCallback(async (file) => {
+    const cacheKey = getFileCacheKey(file);
+
+    // Show cached page 1 immediately if available
+    const cached = pdfPageCacheRef.current.get(cacheKey)?.get(1);
+    if (cached) {
+      setPdfPreviewSrc(cached);
+    } else {
       setPdfRendering(true);
+      setPdfPreviewSrc(null);
+    }
+
+    try {
       const pdfjs = await loadPdfjs();
       const arrayBuffer = await file.arrayBuffer();
       const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
@@ -113,19 +146,40 @@ export default function HomePage() {
       pdfDocRef.current = pdf;
       setPdfTotalPages(pdf.numPages);
       setPdfPageNum(1);
-      await renderPdfPage(pdf, 1);
+
+      if (!cached) {
+        const dataUrl = await renderPageToDataUrl(pdf, 1, cacheKey);
+        setPdfPreviewSrc(dataUrl);
+        setPdfRendering(false);
+      }
     } catch (err) {
       console.error('PDF preview error:', err);
       setPdfRendering(false);
     }
-  }, [loadPdfjs, renderPdfPage]);
+  }, [loadPdfjs, getFileCacheKey, renderPageToDataUrl]);
 
   // Handle page navigation
   const goToPdfPage = useCallback(async (newPage) => {
     if (!pdfDocRef.current || newPage < 1 || newPage > pdfTotalPages) return;
+
+    const file = files[selectedFileIndex];
+    if (!file) return;
+    const cacheKey = getFileCacheKey(file);
+
+    // Show cached immediately if available
+    const cached = pdfPageCacheRef.current.get(cacheKey)?.get(newPage);
+    if (cached) {
+      setPdfPageNum(newPage);
+      setPdfPreviewSrc(cached);
+      return;
+    }
+
     setPdfPageNum(newPage);
-    await renderPdfPage(pdfDocRef.current, newPage);
-  }, [pdfTotalPages, renderPdfPage]);
+    setPdfRendering(true);
+    const dataUrl = await renderPageToDataUrl(pdfDocRef.current, newPage, cacheKey);
+    setPdfPreviewSrc(dataUrl);
+    setPdfRendering(false);
+  }, [pdfTotalPages, files, selectedFileIndex, getFileCacheKey, renderPageToDataUrl]);
 
   // When selected file changes, update preview
   useEffect(() => {
@@ -134,6 +188,7 @@ export default function HomePage() {
       setPreviewUrl(null);
       pdfDocRef.current = null;
       setPdfTotalPages(0);
+      setPdfPreviewSrc(null);
       return;
     }
 
@@ -143,8 +198,10 @@ export default function HomePage() {
     } else if (file.type.startsWith('image/')) {
       pdfDocRef.current = null;
       setPdfTotalPages(0);
-      setPreviewUrl(URL.createObjectURL(file));
-      return () => URL.revokeObjectURL(previewUrl);
+      setPdfPreviewSrc(null);
+      const url = URL.createObjectURL(file);
+      setPreviewUrl(url);
+      return () => URL.revokeObjectURL(url);
     }
   }, [selectedFileIndex, files]);
 
@@ -187,9 +244,13 @@ export default function HomePage() {
     }
 
     if (validation.validFiles.length > 0) {
+      // Preload page 1 of any PDFs in the background immediately
+      validation.validFiles.forEach(f => {
+        if (f.type === 'application/pdf') preloadPdf(f);
+      });
+
       setFiles(prevFiles => {
         const newFiles = [...prevFiles, ...validation.validFiles];
-        // Select the first new file
         setSelectedFileIndex(prevFiles.length);
         return newFiles;
       });
@@ -197,11 +258,18 @@ export default function HomePage() {
   };
 
   const removeFile = (index) => {
+    // Clean up cache for removed file
+    const removedFile = files[index];
+    if (removedFile) {
+      pdfPageCacheRef.current.delete(getFileCacheKey(removedFile));
+    }
+
     setFiles(prevFiles => {
       const newFiles = prevFiles.filter((_, i) => i !== index);
       if (newFiles.length === 0) {
         setSelectedFileIndex(0);
         setPreviewUrl(null);
+        setPdfPreviewSrc(null);
         pdfDocRef.current = null;
         setPdfTotalPages(0);
       } else if (selectedFileIndex >= newFiles.length) {
@@ -457,7 +525,7 @@ export default function HomePage() {
                       + ADD
                     </label>
                     <button
-                      onClick={() => { setFiles([]); setPreviewUrl(null); setSelectedFileIndex(0); pdfDocRef.current = null; setPdfTotalPages(0); }}
+                      onClick={() => { setFiles([]); setPreviewUrl(null); setPdfPreviewSrc(null); setSelectedFileIndex(0); pdfDocRef.current = null; setPdfTotalPages(0); pdfPageCacheRef.current.clear(); }}
                       className="px-2 py-1 text-xs font-mono text-red-400 hover:text-red-300"
                     >
                       CLEAR
@@ -510,8 +578,8 @@ export default function HomePage() {
 
                       {previewUrl ? (
                         <img src={previewUrl} alt="Preview" className="max-w-full max-h-full object-contain" />
-                      ) : pdfTotalPages > 0 ? (
-                        <canvas ref={pdfCanvasRef} className="max-w-full max-h-full object-contain" />
+                      ) : pdfPreviewSrc ? (
+                        <img src={pdfPreviewSrc} alt="PDF Preview" className="max-w-full max-h-full object-contain" />
                       ) : (
                         <div className="text-center p-8">
                           <Eye className="w-12 h-12 text-[#30363d] mx-auto mb-3" />
