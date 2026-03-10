@@ -27,69 +27,89 @@ async function getPdfjs() {
 
 // ─── Main Export ─────────────────────────────────────────────────────────────
 
-export async function analyzeDrawing(file, template = 'isa-5.1') {
+export async function analyzeDrawing(file, template = 'isa-5.1', onProgress) {
   const isPdf = file.type === 'application/pdf';
   const prompt = buildPrompt(template);
+  const report = onProgress || (() => {});
 
   console.log(`Starting analysis: ${file.name} (${isPdf ? 'PDF' : 'Image'})`);
 
+  report('reading');
   let images;
   if (isPdf) {
-    images = await pdfToImages(file);
+    const pdfjs = await getPdfjs();
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+    const totalPages = pdf.numPages;
+    const pagesToProcess = Math.min(totalPages, 5);
+
+    report('converting');
+    const pageImages = [];
+    for (let pageNum = 1; pageNum <= pagesToProcess; pageNum++) {
+      console.log(`Rendering page ${pageNum}/${pagesToProcess}...`);
+      const pageImage = await renderPageToJpeg(pdf, pageNum);
+      pageImages.push(pageImage);
+    }
+    images = pageImages;
   } else {
+    report('converting');
     const base64 = await fileToBase64(file);
     images = [base64];
   }
 
   console.log(`Converted to ${images.length} image(s), sending to analysis...`);
 
+  report('analyzing');
   const responseText = await callAnalyzeApi(images, prompt);
+
+  report('processing');
   return parseClaudeResponse(responseText);
 }
 
 // ─── PDF -> Images ────────────────────────────────────────────────────────────
 
-async function pdfToImages(pdfFile) {
-  const pdfjs = await getPdfjs();
-  const arrayBuffer = await pdfFile.arrayBuffer();
-  const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+async function renderPageToJpeg(pdf, pageNum) {
+  const page = await pdf.getPage(pageNum);
 
-  const totalPages = pdf.numPages;
-  console.log(`PDF has ${totalPages} page(s)`);
+  // Start at scale 1.2, then cap at max 1800px on longest side
+  let scale = 1.2;
+  const viewport = page.getViewport({ scale: 1.0 });
+  const maxDimension = Math.max(viewport.width, viewport.height);
 
-  const pagesToProcess = Math.min(totalPages, 5);
-  const images = [];
-
-  for (let pageNum = 1; pageNum <= pagesToProcess; pageNum++) {
-    console.log(`Rendering page ${pageNum}/${pagesToProcess}...`);
-    const pageImage = await renderPageToJpeg(pdf, pageNum);
-    images.push(pageImage);
+  // Cap so longest side never exceeds 1800px
+  if (maxDimension * scale > 1800) {
+    scale = 1800 / maxDimension;
   }
 
-  return images;
-}
-
-async function renderPageToJpeg(pdf, pageNum, scale = 2.0) {
-  const page = await pdf.getPage(pageNum);
-  const viewport = page.getViewport({ scale });
+  const scaledViewport = page.getViewport({ scale });
 
   const canvas = document.createElement('canvas');
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
+  canvas.width = scaledViewport.width;
+  canvas.height = scaledViewport.height;
 
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = 'white';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  await page.render({ canvasContext: ctx, viewport }).promise;
+  await page.render({ canvasContext: ctx, viewport: scaledViewport }).promise;
 
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+  // Quality 0.7 — sharp enough to read instrument tags
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+
+  console.log(`Page ${pageNum} rendered: ${canvas.width}x${canvas.height}px`);
+
   return dataUrl.split(',')[1];
 }
 
 // ─── API Call ─────────────────────────────────────────────────────────────────
 
 async function callAnalyzeApi(images, prompt) {
+  const imageSizeKB = Math.round((images[0].length * 0.75) / 1024);
+  console.log(`Sending image: ~${imageSizeKB}KB`);
+  if (imageSizeKB > 3000) {
+    console.warn('Image is very large, may cause timeout');
+  }
+
   const response = await fetch('/api/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

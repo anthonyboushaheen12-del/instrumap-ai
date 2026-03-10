@@ -32,6 +32,7 @@ export default function HomePage() {
   const [error, setError] = useState(null);
   const [dragActive, setDragActive] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState({ current: 0, total: 0 });
+  const [analysisStep, setAnalysisStep] = useState('reading');
   const [showPidDetails, setShowPidDetails] = useState(false);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [pidDetails, setPidDetails] = useState({
@@ -345,6 +346,7 @@ export default function HomePage() {
     }
 
     setAnalyzing(true);
+    setAnalysisStep('reading');
     setError(null);
     setAnalysisProgress({ current: 0, total: files.length });
 
@@ -359,7 +361,7 @@ export default function HomePage() {
         try {
           const instruments = useMock
             ? await mockAnalyzeDrawing(file, template)
-            : await analyzeDrawing(file, template);
+            : await analyzeDrawing(file, template, setAnalysisStep);
           if (instruments && instruments.length > 0) {
             const instrumentsWithSource = instruments.map(inst => ({ ...inst, source: file.name }));
             allInstruments.push(...instrumentsWithSource);
@@ -425,7 +427,7 @@ export default function HomePage() {
   return (
     <div className="h-screen flex flex-col bg-[#0d1117] overflow-hidden">
       <Header />
-      {analyzing && <LoadingOverlay />}
+      {analyzing && <LoadingOverlay step={analysisStep} />}
       <ErrorMessage error={typeof error === 'object' ? error : null} onClose={() => setError(null)} />
 
       {/* Main Content - Two Column Layout */}
