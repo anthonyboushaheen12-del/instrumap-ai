@@ -54,31 +54,15 @@ export default function HomePage() {
   // Cache: Map<string, Map<number, string>> — fileKey → (pageNum → dataURL)
   const pdfPageCacheRef = useRef(new Map());
 
-  // Load PDF.js from CDN
+  // Load PDF.js from CDN via dynamic import
   const loadPdfjs = useCallback(async () => {
     if (pdfjsLibRef.current) return pdfjsLibRef.current;
 
-    if (window.pdfjsLib) {
-      pdfjsLibRef.current = window.pdfjsLib;
-      pdfjsLibRef.current.GlobalWorkerOptions.workerSrc =
-        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
-      return pdfjsLibRef.current;
-    }
-
-    await new Promise((resolve, reject) => {
-      const script = document.createElement('script');
-      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs';
-      script.type = 'module';
-      script.onload = resolve;
-      script.onerror = reject;
-      document.head.appendChild(script);
-    });
-    await new Promise((r) => setTimeout(r, 300));
-
-    pdfjsLibRef.current = window.pdfjsLib;
-    pdfjsLibRef.current.GlobalWorkerOptions.workerSrc =
+    const pdfjs = await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs');
+    pdfjs.GlobalWorkerOptions.workerSrc =
       'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
-    return pdfjsLibRef.current;
+    pdfjsLibRef.current = pdfjs;
+    return pdfjs;
   }, []);
 
   // Get a stable cache key for a file
