@@ -7,8 +7,10 @@ import {
 } from 'lucide-react';
 import Header from '../components/Header';
 import SuccessToast from '../components/SuccessToast';
+import PdfPanel from '../components/PdfPanel';
 import { exportToExcelWithSummary, calculateSummary } from '../utils/exportToExcel';
 import { getAnalysisData, clearAnalysisData } from '../utils/storage';
+import { getStoredFiles } from '../utils/fileStore';
 import { analyzeDrawing, mockAnalyzeDrawing } from '../utils/analyzeDrawing';
 import { validateFiles } from '../utils/fileValidator';
 
@@ -27,6 +29,10 @@ export default function ResultsPage() {
   const [newSignalType, setNewSignalType] = useState('AI');
   const [newDescription, setNewDescription] = useState('');
   const [showPidDetails, setShowPidDetails] = useState(false);
+
+  // PDF panel state
+  const [pdfCollapsed, setPdfCollapsed] = useState(false);
+  const [hasDrawingFiles, setHasDrawingFiles] = useState(false);
 
   // Multi-PDF accumulation state
   const [analyzedFiles, setAnalyzedFiles] = useState([]);
@@ -70,6 +76,7 @@ export default function ResultsPage() {
       });
     }
     setAnalyzedFiles(initialFiles);
+    setHasDrawingFiles(getStoredFiles().length > 0);
 
     clearAnalysisData();
   }, [location.state, navigate]);
@@ -234,8 +241,20 @@ export default function ResultsPage() {
         multiple
       />
 
-      <main className="flex-1 px-6 py-20">
-        <div className="max-w-7xl mx-auto">
+      <div className="flex-1 flex flex-col md:flex-row pt-16 overflow-hidden">
+        {/* PDF Panel - Left Side */}
+        {hasDrawingFiles && (
+          <PdfPanel
+            collapsed={pdfCollapsed}
+            onToggle={() => setPdfCollapsed(prev => !prev)}
+          />
+        )}
+
+        {/* Results Panel - Right Side */}
+        <main className={`results-panel flex-1 overflow-y-auto px-6 py-6 ${
+          hasDrawingFiles && !pdfCollapsed ? 'results-panel-with-pdf' : ''
+        }`}>
+          <div className="max-w-7xl mx-auto">
           {/* Top Action Bar */}
           <div className="flex items-center justify-between mb-6">
             <button
@@ -673,6 +692,7 @@ export default function ResultsPage() {
           </div>
         </div>
       </main>
+      </div>
 
       {/* Terminal Footer */}
       <footer className="border-t border-[#30363d] bg-[#0d1117] px-6 py-4">

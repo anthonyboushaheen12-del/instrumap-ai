@@ -10,6 +10,7 @@ import Header from '../components/Header';
 import LoadingOverlay from '../components/LoadingOverlay';
 import { analyzeDrawing, mockAnalyzeDrawing } from '../utils/analyzeDrawing';
 import { saveAnalysisData } from '../utils/storage';
+import { storeFiles } from '../utils/fileStore';
 import { validateFiles } from '../utils/fileValidator';
 import { createErrorNotification, logError } from '../utils/errorHandler';
 import ErrorMessage from '../components/ErrorMessage';
@@ -426,6 +427,7 @@ export default function HomePage() {
         pidDetails,
       };
       saveAnalysisData(analysisData);
+      storeFiles(files);
       navigate('/results', { state: analysisData });
     } catch (err) {
       logError(err, { context: 'analysis', fileCount: files.length, template });

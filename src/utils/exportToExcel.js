@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import XLSX from 'xlsx-js-style';
 import { lookupComponent } from './ioLibrary';
 
 /**
@@ -130,187 +130,211 @@ function extractEquipment(tag, providedEquipment, description) {
   return tag.split('-')[0] || 'INSTRUMENT';
 }
 
+// --- Styling constants ---
+
+const HEADER_STYLE = {
+  font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 11 },
+  fill: { fgColor: { rgb: '1A1A2E' } },
+  alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+  border: {
+    top: { style: 'thin', color: { rgb: '000000' } },
+    bottom: { style: 'thin', color: { rgb: '000000' } },
+    left: { style: 'thin', color: { rgb: '000000' } },
+    right: { style: 'thin', color: { rgb: '000000' } },
+  },
+};
+
+const ROW_STYLES = {
+  AI: { fgColor: { rgb: 'E8F4FD' } },
+  DI: { fgColor: { rgb: 'E8F9E8' } },
+  DO: { fgColor: { rgb: 'FFF3E0' } },
+  AO: { fgColor: { rgb: 'F3E8FF' } },
+  COM: { fgColor: { rgb: 'F5F5F5' } },
+};
+
+const CELL_BORDER = {
+  top: { style: 'thin', color: { rgb: 'CCCCCC' } },
+  bottom: { style: 'thin', color: { rgb: 'CCCCCC' } },
+  left: { style: 'thin', color: { rgb: 'CCCCCC' } },
+  right: { style: 'thin', color: { rgb: 'CCCCCC' } },
+};
+
+function getRowStyle(signalType) {
+  const fill = ROW_STYLES[signalType] || { fgColor: { rgb: 'FFFFFF' } };
+  return {
+    font: { sz: 10 },
+    fill,
+    alignment: { vertical: 'center' },
+    border: CELL_BORDER,
+  };
+}
+
+/**
+ * Auto-fit column widths based on cell content
+ */
+function autoFitColumns(sheetData, minWidths = []) {
+  const colWidths = [];
+  for (const row of sheetData) {
+    row.forEach((cell, i) => {
+      const len = cell != null ? String(cell).length : 0;
+      if (!colWidths[i] || len > colWidths[i]) {
+        colWidths[i] = len;
+      }
+    });
+  }
+  return colWidths.map((w, i) => ({
+    wch: Math.max(w + 2, minWidths[i] || 8),
+  }));
+}
+
+/**
+ * Apply header styles to the first row and freeze it
+ */
+function styleSheet(ws, headerCount, dataRows, signalTypeColIndex) {
+  // Style header cells
+  const colLetters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  for (let c = 0; c < headerCount; c++) {
+    const ref = `${colLetters[c]}1`;
+    if (ws[ref]) {
+      ws[ref].s = HEADER_STYLE;
+    }
+  }
+
+  // Style data rows
+  for (let r = 0; r < dataRows.length; r++) {
+    const signalType = dataRows[r][signalTypeColIndex];
+    const style = getRowStyle(signalType);
+    for (let c = 0; c < headerCount; c++) {
+      const ref = `${colLetters[c]}${r + 2}`;
+      if (ws[ref]) {
+        ws[ref].s = style;
+      }
+    }
+  }
+
+  // Freeze top row
+  ws['!freeze'] = { xSplit: 0, ySplit: 1, topLeftCell: 'A2', activePane: 'bottomLeft' };
+}
+
 /**
  * Exports instrument data to Excel file
  * @param {Array} instruments - Array of instrument objects
  * @param {string} filename - Original P&ID filename
  */
 export function exportToExcel(instruments, filename) {
-  // Prepare data for Excel
-  const worksheetData = [
-    // Header row
-    ['#', 'Tag', 'Signal Type', 'Description'],
-    // Data rows
-    ...instruments.map((instrument, index) => [
-      index + 1,
-      instrument.tag,
-      instrument.signalType,
-      instrument.description,
-    ]),
-  ];
+  const headers = ['#', 'TAG', 'SIGNAL TYPE', 'DESCRIPTION'];
+  const dataRows = instruments.map((instrument, index) => [
+    index + 1,
+    instrument.tag,
+    instrument.signalType,
+    instrument.description,
+  ]);
 
-  // Create workbook and worksheet
+  const worksheetData = [headers, ...dataRows];
+
   const workbook = XLSX.utils.book_new();
   const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
 
-  // Set column widths
-  worksheet['!cols'] = [
-    { wch: 5 },  // # column
-    { wch: 15 }, // Tag column
-    { wch: 12 }, // Signal Type column
-    { wch: 40 }, // Description column
-  ];
+  worksheet['!cols'] = autoFitColumns(worksheetData, [5, 15, 12, 40]);
+  styleSheet(worksheet, headers.length, dataRows, 2); // signalType at index 2
 
-  // Style the header row (bold)
-  const headerStyle = {
-    font: { bold: true },
-    fill: { fgColor: { rgb: '4F46E5' } },
-    alignment: { horizontal: 'center', vertical: 'center' },
-  };
-
-  // Apply header styles (A1:D1)
-  ['A1', 'B1', 'C1', 'D1'].forEach(cell => {
-    if (worksheet[cell]) {
-      worksheet[cell].s = headerStyle;
-    }
-  });
-
-  // Add worksheet to workbook
   XLSX.utils.book_append_sheet(workbook, worksheet, 'IO List');
 
+  // --- Summary sheet ---
+  const summary = calculateSummary(instruments);
+  const summarySheetData = buildSummarySheetData(summary);
+  const summarySheet = XLSX.utils.aoa_to_sheet(summarySheetData);
+  summarySheet['!cols'] = [{ wch: 25 }, { wch: 12 }];
+  styleSummarySheet(summarySheet, summarySheetData);
+  XLSX.utils.book_append_sheet(workbook, summarySheet, 'Summary');
+
   // Generate filename
-  const baseFilename = filename.replace(/\.[^/.]+$/, ''); // Remove extension
+  const baseFilename = filename.replace(/\.[^/.]+$/, '');
   const exportFilename = `${baseFilename}_IOList.xlsx`;
 
-  // Write and download file using blob method for better browser compatibility
-  const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-  const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-
-  // Create download link and trigger download
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = exportFilename;
-  document.body.appendChild(link);
-  link.click();
-
-  // Cleanup
-  setTimeout(() => {
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  }, 100);
-
+  downloadWorkbook(workbook, exportFilename);
   return exportFilename;
 }
 
 /**
  * Exports instrument data with additional summary sheet
- * Matches official I/O LIST format (e.g., OM23076-0100D-DAR-TD-2-I&C-015)
- * @param {Array} instruments - Array of instrument objects
- * @param {string} filename - Original P&ID filename
- * @param {Object} summary - Summary statistics
- * @param {Object} pidDetails - Optional P&ID details
+ * Matches official I/O LIST format
  */
 export function exportToExcelWithSummary(instruments, filename, summary, pidDetails = null) {
   const workbook = XLSX.utils.book_new();
 
-  // Create I/O List worksheet matching OFFICIAL format
-  // Headers matching DAR Al-Handasah I/O list standard
+  // --- I/O List sheet ---
   const ioListHeaders = [
     'SN',
     'LOCATION',
     'EQUIPMENT/INSTRUMENT',
     'SIGNAL',
     'IO TYPE',
-    'ALARM'
+    'ALARM',
   ];
 
-  const ioListData = [
-    ioListHeaders,
-    ...instruments.map((instrument, index) => {
-      return [
-        index + 1,                                                                                    // SN
-        extractLocation(instrument.tag, instrument.location, instrument.equipment),                   // LOCATION
-        extractEquipment(instrument.tag, instrument.equipment, instrument.description),                // EQUIPMENT/INSTRUMENT
-        instrument.description.toUpperCase(),                                                         // SIGNAL
-        instrument.signalType,                                                                        // IO TYPE
-        instrument.isAlarm ? 'X' : ''                                                                 // ALARM
-      ];
-    }),
-  ];
+  const dataRows = instruments.map((instrument, index) => [
+    index + 1,
+    extractLocation(instrument.tag, instrument.location, instrument.equipment),
+    extractEquipment(instrument.tag, instrument.equipment, instrument.description),
+    instrument.description.toUpperCase(),
+    instrument.signalType,
+    instrument.isAlarm ? 'X' : '',
+  ]);
 
+  const ioListData = [ioListHeaders, ...dataRows];
   const ioListSheet = XLSX.utils.aoa_to_sheet(ioListData);
-  ioListSheet['!cols'] = [
-    { wch: 5 },   // SN
-    { wch: 18 },  // LOCATION
-    { wch: 35 },  // EQUIPMENT/INSTRUMENT
-    { wch: 45 },  // SIGNAL
-    { wch: 10 },  // IO TYPE
-    { wch: 8 },   // ALARM
-  ];
+  ioListSheet['!cols'] = autoFitColumns(ioListData, [5, 18, 35, 45, 10, 8]);
+  styleSheet(ioListSheet, ioListHeaders.length, dataRows, 4); // IO TYPE at index 4
   XLSX.utils.book_append_sheet(workbook, ioListSheet, 'IO List');
 
-  // Create Summary worksheet
+  // --- Summary sheet ---
   const summaryData = [
-    ['P&ID Analysis Summary'],
-    [],
+    ['P&ID ANALYSIS SUMMARY', ''],
+    ['', ''],
   ];
 
-  // Add P&ID Details if provided
   if (pidDetails) {
-    if (pidDetails.projectName) {
-      summaryData.push(['Project Name', pidDetails.projectName]);
-    }
-    if (pidDetails.drawingNumber) {
-      summaryData.push(['Drawing Number', pidDetails.drawingNumber]);
-    }
-    if (pidDetails.revision) {
-      summaryData.push(['Revision', pidDetails.revision]);
-    }
-    if (pidDetails.area) {
-      summaryData.push(['Area / Unit', pidDetails.area]);
-    }
-    summaryData.push([]);
+    if (pidDetails.projectName) summaryData.push(['PROJECT NAME', pidDetails.projectName]);
+    if (pidDetails.drawingNumber) summaryData.push(['DRAWING NUMBER', pidDetails.drawingNumber]);
+    if (pidDetails.revision) summaryData.push(['REVISION', pidDetails.revision]);
+    if (pidDetails.area) summaryData.push(['AREA / UNIT', pidDetails.area]);
+    summaryData.push(['', '']);
   }
 
-  summaryData.push(['Drawing File', filename]);
-  summaryData.push(['Export Date', new Date().toLocaleDateString()]);
-  summaryData.push(['Export Time', new Date().toLocaleTimeString()]);
-  summaryData.push(['Total Tags', summary.total || instruments.length]);
-  summaryData.push([]);
-  summaryData.push(['Signal Type Breakdown']);
-  summaryData.push(['AI (Analog Input)', summary.AI || 0]);
-  summaryData.push(['DI (Digital Input)', summary.DI || 0]);
-  summaryData.push(['DO (Digital Output)', summary.DO || 0]);
-  summaryData.push(['AO (Analog Output)', summary.AO || 0]);
-  summaryData.push(['COM (Communication)', summary.COM || 0]);
+  summaryData.push(['DRAWING FILE', filename]);
+  summaryData.push(['EXPORT DATE', new Date().toLocaleDateString()]);
+  summaryData.push(['EXPORT TIME', new Date().toLocaleTimeString()]);
+  summaryData.push(['TOTAL TAGS', summary.total || instruments.length]);
+  summaryData.push(['', '']);
+  summaryData.push(['SIGNAL TYPE BREAKDOWN', '']);
+  summaryData.push(['AI (ANALOG INPUT)', summary.AI || 0]);
+  summaryData.push(['DI (DIGITAL INPUT)', summary.DI || 0]);
+  summaryData.push(['DO (DIGITAL OUTPUT)', summary.DO || 0]);
+  summaryData.push(['AO (ANALOG OUTPUT)', summary.AO || 0]);
+  summaryData.push(['COM (COMMUNICATION)', summary.COM || 0]);
 
-  // Add Equipment List if provided
   if (pidDetails && pidDetails.equipmentList) {
-    summaryData.push([]);
-    summaryData.push(['Equipment List']);
+    summaryData.push(['', '']);
+    summaryData.push(['EQUIPMENT LIST', '']);
     const equipmentLines = pidDetails.equipmentList.split('\n').filter(line => line.trim());
     equipmentLines.forEach(line => {
-      summaryData.push([line.trim()]);
+      summaryData.push([line.trim(), '']);
     });
   }
 
-  // Add Notes if provided
   if (pidDetails && pidDetails.notes) {
-    summaryData.push([]);
-    summaryData.push(['Notes']);
-    summaryData.push([pidDetails.notes]);
+    summaryData.push(['', '']);
+    summaryData.push(['NOTES', '']);
+    summaryData.push([pidDetails.notes, '']);
   }
 
   const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
-  summarySheet['!cols'] = [
-    { wch: 25 },
-    { wch: 40 },
-  ];
+  summarySheet['!cols'] = [{ wch: 30 }, { wch: 40 }];
+  styleSummarySheet(summarySheet, summaryData);
   XLSX.utils.book_append_sheet(workbook, summarySheet, 'Summary');
 
-  // Generate filename based on drawing number if available
-  // Sanitize to remove invalid filename characters
+  // Generate filename
   let exportFilename;
   if (pidDetails && pidDetails.drawingNumber) {
     const sanitizedDrawingNumber = pidDetails.drawingNumber.replace(/[:\\/?*[\]<>|"]/g, '_');
@@ -320,11 +344,95 @@ export function exportToExcelWithSummary(instruments, filename, summary, pidDeta
     exportFilename = `${baseFilename}_IOList.xlsx`;
   }
 
-  // Write and download file using blob method for better browser compatibility
-  const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-  const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  downloadWorkbook(workbook, exportFilename);
+  return exportFilename;
+}
 
-  // Create download link and trigger download
+/**
+ * Build summary sheet data array for the standalone summary
+ */
+function buildSummarySheetData(summary) {
+  return [
+    ['SIGNAL TYPE', 'COUNT'],
+    ['AI (ANALOG INPUT)', summary.AI || 0],
+    ['DI (DIGITAL INPUT)', summary.DI || 0],
+    ['DO (DIGITAL OUTPUT)', summary.DO || 0],
+    ['AO (ANALOG OUTPUT)', summary.AO || 0],
+    ['COM (COMMUNICATION)', summary.COM || 0],
+    ['', ''],
+    ['TOTAL', summary.total || 0],
+  ];
+}
+
+/**
+ * Style the summary sheet with header + type-colored rows
+ */
+function styleSummarySheet(ws, data) {
+  const typeColors = {
+    'AI (ANALOG INPUT)': ROW_STYLES.AI,
+    'DI (DIGITAL INPUT)': ROW_STYLES.DI,
+    'DO (DIGITAL OUTPUT)': ROW_STYLES.DO,
+    'AO (ANALOG OUTPUT)': ROW_STYLES.AO,
+    'COM (COMMUNICATION)': ROW_STYLES.COM,
+  };
+
+  // Style first row as header
+  ['A1', 'B1'].forEach(ref => {
+    if (ws[ref]) {
+      ws[ref].s = HEADER_STYLE;
+    }
+  });
+
+  // Style signal-type rows with matching colors
+  for (let r = 0; r < data.length; r++) {
+    const label = String(data[r][0] || '');
+    const fill = typeColors[label];
+    if (fill) {
+      ['A', 'B'].forEach(col => {
+        const ref = `${col}${r + 1}`;
+        if (ws[ref]) {
+          ws[ref].s = {
+            font: { sz: 10 },
+            fill,
+            border: CELL_BORDER,
+            alignment: { vertical: 'center' },
+          };
+        }
+      });
+    }
+    // Bold the TOTAL row
+    if (label === 'TOTAL') {
+      ['A', 'B'].forEach(col => {
+        const ref = `${col}${r + 1}`;
+        if (ws[ref]) {
+          ws[ref].s = {
+            font: { bold: true, sz: 11 },
+            border: {
+              top: { style: 'medium', color: { rgb: '000000' } },
+              bottom: { style: 'medium', color: { rgb: '000000' } },
+              left: { style: 'thin', color: { rgb: 'CCCCCC' } },
+              right: { style: 'thin', color: { rgb: 'CCCCCC' } },
+            },
+            alignment: { vertical: 'center' },
+          };
+        }
+      });
+    }
+  }
+
+  // Freeze top row
+  ws['!freeze'] = { xSplit: 0, ySplit: 1, topLeftCell: 'A2', activePane: 'bottomLeft' };
+}
+
+/**
+ * Write workbook to blob and trigger browser download
+ */
+function downloadWorkbook(workbook, exportFilename) {
+  const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([wbout], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
@@ -332,13 +440,10 @@ export function exportToExcelWithSummary(instruments, filename, summary, pidDeta
   document.body.appendChild(link);
   link.click();
 
-  // Cleanup
   setTimeout(() => {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   }, 100);
-
-  return exportFilename;
 }
 
 /**

@@ -948,3 +948,141 @@ textarea:focus-visible {
   box-shadow: 0 0 10px #22c55e;
   animation: led-pulse 2s ease-in-out infinite;
 }
+
+/* ── PDF Panel (Results Page Side-by-Side) ── */
+
+.pdf-panel-container {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #30363d;
+  background: #0d1117;
+  position: relative;
+}
+
+.pdf-panel-expanded {
+  width: 40%;
+  min-width: 320px;
+}
+
+.pdf-panel-collapsed {
+  width: 0;
+  min-width: 0;
+  border-right: none;
+  overflow: hidden;
+}
+
+.pdf-panel-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  color: #22c55e;
+  cursor: pointer;
+  position: absolute;
+  top: 8px;
+  right: -1px;
+  z-index: 20;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+
+.pdf-panel-collapsed .pdf-panel-toggle {
+  right: auto;
+  left: 0;
+  position: relative;
+  margin: 8px;
+  width: fit-content;
+}
+
+/* When collapsed, show toggle outside */
+.pdf-panel-collapsed {
+  width: auto;
+  min-width: auto;
+  overflow: visible;
+}
+
+.pdf-panel-toggle:hover {
+  background: #21262d;
+  border-color: #22c55e;
+}
+
+.pdf-panel-viewer {
+  flex: 1;
+  overflow: hidden;
+  margin-top: 40px;
+}
+
+/* Dark theme overrides for react-pdf-viewer */
+.pdf-panel-viewer .rpv-core__viewer {
+  background: #0d1117 !important;
+}
+
+.pdf-panel-viewer .rpv-core__inner-pages {
+  background: #0d1117 !important;
+}
+
+.pdf-panel-viewer .rpv-default-layout__container {
+  border: none !important;
+  background: #0d1117 !important;
+}
+
+.pdf-panel-viewer .rpv-default-layout__body {
+  background: #0d1117 !important;
+}
+
+.pdf-panel-viewer .rpv-default-layout__toolbar {
+  background: #161b22 !important;
+  border-bottom: 1px solid #30363d !important;
+}
+
+.pdf-panel-viewer .rpv-core__minimal-button {
+  color: #c9d1d9 !important;
+}
+
+.pdf-panel-viewer .rpv-core__minimal-button:hover {
+  background: #21262d !important;
+}
+
+.pdf-panel-viewer .rpv-core__textbox {
+  background: #0d1117 !important;
+  border: 1px solid #30363d !important;
+  color: #c9d1d9 !important;
+}
+
+.pdf-panel-viewer .rpv-core__popover-body {
+  background: #161b22 !important;
+  border: 1px solid #30363d !important;
+  color: #c9d1d9 !important;
+}
+
+.pdf-panel-viewer .rpv-default-layout__sidebar {
+  background: #161b22 !important;
+}
+
+/* Results panel when PDF is visible */
+.results-panel {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Mobile: stack vertically */
+@media (max-width: 768px) {
+  .pdf-panel-expanded {
+    width: 100%;
+    max-height: 50vh;
+    border-right: none;
+    border-bottom: 1px solid #30363d;
+  }
+
+  .pdf-panel-toggle {
+    right: 8px;
+  }
+
+  .results-panel {
+    flex: 1;
+    overflow-y: auto;
+  }
+}
