@@ -1,4 +1,8 @@
 import { buildLibraryForPrompt } from './ioLibrary';
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.js?url';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 /**
  * analyzeDrawing.js
@@ -9,21 +13,6 @@ import { buildLibraryForPrompt } from './ioLibrary';
  *   2. Send those images to /api/analyze (our Vercel serverless function)
  *   3. The serverless function adds the API key and calls Claude vision
  */
-
-// ─── PDF.js Setup ────────────────────────────────────────────────────────────
-
-let pdfjsLib = null;
-
-async function getPdfjs() {
-  if (pdfjsLib) return pdfjsLib;
-
-  const pdfjs = await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs');
-  pdfjs.GlobalWorkerOptions.workerSrc =
-    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
-  pdfjsLib = pdfjs;
-
-  return pdfjsLib;
-}
 
 // ─── Main Export ─────────────────────────────────────────────────────────────
 
@@ -37,20 +26,27 @@ export async function analyzeDrawing(file, template = 'isa-5.1', onProgress) {
   report('reading');
   let images;
   if (isPdf) {
-    const pdfjs = await getPdfjs();
-    const arrayBuffer = await file.arrayBuffer();
-    const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
-    const totalPages = pdf.numPages;
-    const pagesToProcess = Math.min(totalPages, 5);
+    const pdfRenderPromise = (async () => {
+      const arrayBuffer = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      const totalPages = pdf.numPages;
+      const pagesToProcess = Math.min(totalPages, 5);
 
-    report('converting');
-    const pageImages = [];
-    for (let pageNum = 1; pageNum <= pagesToProcess; pageNum++) {
-      console.log(`Rendering page ${pageNum}/${pagesToProcess}...`);
-      const pageImage = await renderPageToJpeg(pdf, pageNum);
-      pageImages.push(pageImage);
-    }
-    images = pageImages;
+      report('converting');
+      const pageImages = [];
+      for (let pageNum = 1; pageNum <= pagesToProcess; pageNum++) {
+        console.log(`Rendering page ${pageNum}/${pagesToProcess}...`);
+        const pageImage = await renderPageToJpeg(pdf, pageNum);
+        pageImages.push(pageImage);
+      }
+      return pageImages;
+    })();
+
+    const timeout = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('PDF rendering timed out — try a smaller file.')), 15000)
+    );
+
+    images = await Promise.race([pdfRenderPromise, timeout]);
   } else {
     report('converting');
     const base64 = await fileToBase64(file);

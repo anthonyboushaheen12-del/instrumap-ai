@@ -6,10 +6,14 @@ import {
   Cpu, Zap, Eye, Check, FileImage,
   ChevronLeft, ChevronRight
 } from 'lucide-react';
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.js?url';
 import Header from '../components/Header';
 import LoadingOverlay from '../components/LoadingOverlay';
 import { analyzeDrawing, mockAnalyzeDrawing } from '../utils/analyzeDrawing';
 import { saveAnalysisData } from '../utils/storage';
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 import { storeFiles } from '../utils/fileStore';
 import { validateFiles } from '../utils/fileValidator';
 import { createErrorNotification, logError } from '../utils/errorHandler';
@@ -51,20 +55,8 @@ export default function HomePage() {
   const [pdfRendering, setPdfRendering] = useState(false);
   const [pdfPreviewSrc, setPdfPreviewSrc] = useState(null);
   const pdfDocRef = useRef(null);
-  const pdfjsLibRef = useRef(null);
   // Cache: Map<string, Map<number, string>> — fileKey → (pageNum → dataURL)
   const pdfPageCacheRef = useRef(new Map());
-
-  // Load PDF.js from CDN via dynamic import
-  const loadPdfjs = useCallback(async () => {
-    if (pdfjsLibRef.current) return pdfjsLibRef.current;
-
-    const pdfjs = await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs');
-    pdfjs.GlobalWorkerOptions.workerSrc =
-      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs';
-    pdfjsLibRef.current = pdfjs;
-    return pdfjs;
-  }, []);
 
   // Get a stable cache key for a file
   const getFileCacheKey = useCallback((file) => `${file.name}_${file.size}_${file.lastModified}`, []);
@@ -102,14 +94,13 @@ export default function HomePage() {
     if (pdfPageCacheRef.current.get(cacheKey)?.has(1)) return;
 
     try {
-      const pdfjs = await loadPdfjs();
       const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
       await renderPageToDataUrl(pdf, 1, cacheKey);
     } catch (err) {
       console.error('PDF preload error:', err);
     }
-  }, [loadPdfjs, getFileCacheKey, renderPageToDataUrl]);
+  }, [getFileCacheKey, renderPageToDataUrl]);
 
   // Load and display a PDF file for the selected file
   const loadPdfPreview = useCallback(async (file) => {
@@ -125,9 +116,8 @@ export default function HomePage() {
     }
 
     try {
-      const pdfjs = await loadPdfjs();
       const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
       pdfDocRef.current = pdf;
       setPdfTotalPages(pdf.numPages);
@@ -142,7 +132,7 @@ export default function HomePage() {
       console.error('PDF preview error:', err);
       setPdfRendering(false);
     }
-  }, [loadPdfjs, getFileCacheKey, renderPageToDataUrl]);
+  }, [getFileCacheKey, renderPageToDataUrl]);
 
   // Handle page navigation
   const goToPdfPage = useCallback(async (newPage) => {
