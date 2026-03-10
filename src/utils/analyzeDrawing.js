@@ -159,15 +159,35 @@ STEP 1 — IDENTIFY every instrument and equipment tag visible in the drawing.
 Examples of tags you'll find: LIT-101, MV-WPS-01, P-WPS-01, PSH-201, TIT-301, UPS-01
 
 STEP 2 — MATCH each tag to the closest COMPONENT in the library above.
-Matching rules:
-- "LIT-101" → matches "LIT" → gives 1 I/O point (WATER LEVEL, AI)
-- "MV-WPS-01" → matches "MV" → gives 6 I/O points (HSC, HSO, ZIC, ZIO, HI, YA)
-- "P-WPS-01" (VFD pump) → matches "HS-DETAIL P1(VFD PUMP)" → gives 19 I/O points
-- "P-WPS-01" (constant speed pump) → matches "HS-DETAIL CP" → gives 7 I/O points
-- "EF-01" (exhaust fan) → matches "HS-DETAIL EF" → gives 6 I/O points
-- If unsure between VFD pump and constant speed pump, use VFD pump
 
 STEP 3 — OUTPUT all I/O points for each matched component.
+
+## STRICT MATCHING RULES
+
+1. ONLY output equipment you can EXPLICITLY SEE tagged in the drawing.
+   Do NOT add equipment from the library that is not visible in the drawing.
+   If you are not sure something exists, leave it out.
+
+2. PUMP TYPE MATCHING — read the detail callout on the drawing carefully:
+   - "DETAIL-SP" or "HS-DETAIL SP" = SUMP PIT PUMP → use "HS-DETAIL SP (SUMP PIT PUMP)" library entry
+   - "DETAIL-P1" or "HS-DETAIL P1" or "VFD" label = VFD PUMP → use "HS-DETAIL P1(VFD PUMP)" entry
+   - "DETAIL-CP" = CONSTANT SPEED PUMP → use "HS-DETAIL CP" entry
+   - When in doubt between pump types, use SUMP PIT PUMP, not VFD PUMP
+
+3. For SUMP PIT PUMPS specifically:
+   The library has ONE entry covering BOTH pumps together.
+   Do NOT duplicate the entry — output it once with equipmentId showing both pumps.
+   Example: equipmentId: "SPS-1 & SPS-2"
+
+4. NEVER output equipment types that are not matched to a visible tag in the drawing.
+   Example: if you don't see "RTU" or "ROOF TOP UNIT" label on the drawing, don't output it.
+
+5. For OCU (Odor Control Unit): match to "ODOR CONTROL UNIT LCP" library entry.
+   Tag format on drawing may appear as "OCU-1" or "PS2.1-OCU-1".
+
+6. For AIT (H2S analyzer): match to "AIT" library entry, output H2S READING signal.
+
+7. For UPS: match to "UPS" library entry, output all its signals.
 
 ## TAG FORMATTING RULES
 - Single-loop instruments (LIT, PIT, FIT, TIT, LSL, LSLL, LSH, LSHH, PSL, PSH, AIT, TIT, FS, SOV):
