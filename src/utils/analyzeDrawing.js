@@ -43,7 +43,7 @@ export async function analyzeDrawing(file, template = 'isa-5.1', onProgress) {
     })();
 
     const timeout = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('PDF rendering timed out — try a smaller file.')), 15000)
+      setTimeout(() => reject(new Error('PDF rendering timed out — try a smaller file.')), 30000)
     );
 
     images = await Promise.race([pdfRenderPromise, timeout]);
@@ -67,14 +67,14 @@ export async function analyzeDrawing(file, template = 'isa-5.1', onProgress) {
 async function renderPageToJpeg(pdf, pageNum) {
   const page = await pdf.getPage(pageNum);
 
-  // Start at scale 1.2, then cap at max 1800px on longest side
-  let scale = 1.2;
+  // Start at scale 2.0 for maximum detail — Claude needs to read small tags
+  let scale = 2.0;
   const viewport = page.getViewport({ scale: 1.0 });
   const maxDimension = Math.max(viewport.width, viewport.height);
 
-  // Cap so longest side never exceeds 1800px
-  if (maxDimension * scale > 1800) {
-    scale = 1800 / maxDimension;
+  // Cap so longest side never exceeds 3000px (balances detail vs file size)
+  if (maxDimension * scale > 3000) {
+    scale = 3000 / maxDimension;
   }
 
   const scaledViewport = page.getViewport({ scale });
@@ -89,8 +89,8 @@ async function renderPageToJpeg(pdf, pageNum) {
 
   await page.render({ canvasContext: ctx, viewport: scaledViewport }).promise;
 
-  // Quality 0.7 — sharp enough to read instrument tags
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+  // Quality 0.85 — high quality for readable instrument tags
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
 
   console.log(`Page ${pageNum} rendered: ${canvas.width}x${canvas.height}px`);
 
@@ -143,6 +143,7 @@ function buildPrompt(template) {
   const libraryText = buildLibraryForPrompt();
 
   return `You are an expert I&C engineer analyzing a P&ID drawing to generate an I/O list.
+You must be EXTREMELY thorough — missing even one instrument tag is unacceptable.
 
 ## YOUR MASTER LIBRARY
 Every component you find MUST be matched against this library. Do not invent signals.
@@ -151,12 +152,20 @@ ${libraryText}
 
 ## HOW TO ANALYZE
 
-STEP 1 — IDENTIFY every instrument and equipment tag visible in the drawing.
-Examples of tags you'll find: LIT-101, MV-WPS-01, P-WPS-01, PSH-201, TIT-301, UPS-01
+STEP 1 — SCAN THE ENTIRE DRAWING SYSTEMATICALLY:
+  a) Start from the TOP-LEFT corner and scan across to the RIGHT, then move DOWN.
+  b) Check EVERY instrument bubble, tag callout, detail box, and equipment label.
+  c) Look inside DETAIL CALLOUT BOXES — they often contain pump/motor/panel details.
+  d) Check the TITLE BLOCK and LEGEND for equipment lists and abbreviations.
+  e) Look for tags in the format: XXX-NNN, XX-NNN, or PREFIX-SUFFIX-NNN.
+  f) Check BOTH the main drawing area AND any detail/inset drawings.
 
-STEP 2 — MATCH each tag to the closest COMPONENT in the library above.
+STEP 2 — IDENTIFY every instrument and equipment tag visible in the drawing.
+Examples of tags you'll find: LIT-101, MV-WPS-01, P-WPS-01, PSH-201, TIT-301, UPS-01, OCU-1, AIT-201, FS-101, SOV-101
 
-STEP 3 — OUTPUT all I/O points for each matched component.
+STEP 3 — MATCH each tag to the closest COMPONENT in the library above.
+
+STEP 4 — OUTPUT all I/O points for each matched component. Output EVERY signal in the library entry — do not skip any.
 
 ## STRICT MATCHING RULES
 
@@ -208,9 +217,12 @@ Return ONLY a JSON array. Each item must have:
 
 ## CRITICAL RULES
 1. ONLY use descriptions from the library — never invent your own
-2. Output ALL I/O points for every equipment found — never skip any
+2. Output ALL I/O points for every equipment found — never skip any signal row
 3. If a component is not in the library, skip it
 4. Return ONLY the JSON array, no other text
+5. COMPLETENESS IS CRITICAL — scan every corner of the drawing, every detail box, every callout
+6. If a pump has 10 I/O points in the library, output all 10 — do not summarize or reduce
+7. Do NOT stop early — process the ENTIRE drawing before returning results
 
 ${template === 'dar' ? '\nProject uses Dar Al-Handasah naming: SPS (sewage), WPS (water), IPS (irrigation)' : ''}`;
 }

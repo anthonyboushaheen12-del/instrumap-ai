@@ -54,6 +54,7 @@ export default function HomePage() {
   const [pdfTotalPages, setPdfTotalPages] = useState(0);
   const [pdfRendering, setPdfRendering] = useState(false);
   const [pdfPreviewSrc, setPdfPreviewSrc] = useState(null);
+  const [pdfError, setPdfError] = useState(null);
   const pdfDocRef = useRef(null);
   // Cache: Map<string, Map<number, string>> — fileKey → (pageNum → dataURL)
   const pdfPageCacheRef = useRef(new Map());
@@ -105,6 +106,7 @@ export default function HomePage() {
   // Load and display a PDF file for the selected file
   const loadPdfPreview = useCallback(async (file) => {
     const cacheKey = getFileCacheKey(file);
+    setPdfError(null);
 
     // Show cached page 1 immediately if available
     const cached = pdfPageCacheRef.current.get(cacheKey)?.get(1);
@@ -126,10 +128,11 @@ export default function HomePage() {
       if (!cached) {
         const dataUrl = await renderPageToDataUrl(pdf, 1, cacheKey);
         setPdfPreviewSrc(dataUrl);
-        setPdfRendering(false);
       }
     } catch (err) {
       console.error('PDF preview error:', err);
+      setPdfError(`Preview failed: ${err.message}`);
+    } finally {
       setPdfRendering(false);
     }
   }, [getFileCacheKey, renderPageToDataUrl]);
@@ -165,6 +168,7 @@ export default function HomePage() {
       pdfDocRef.current = null;
       setPdfTotalPages(0);
       setPdfPreviewSrc(null);
+      setPdfError(null);
       return;
     }
 
@@ -175,11 +179,12 @@ export default function HomePage() {
       pdfDocRef.current = null;
       setPdfTotalPages(0);
       setPdfPreviewSrc(null);
+      setPdfError(null);
       const url = URL.createObjectURL(file);
       setPreviewUrl(url);
       return () => URL.revokeObjectURL(url);
     }
-  }, [selectedFileIndex, files]);
+  }, [selectedFileIndex, files, loadPdfPreview]);
 
   const handleDrag = (e) => {
     e.preventDefault();
@@ -554,7 +559,12 @@ export default function HomePage() {
                         </div>
                       )}
 
-                      {previewUrl ? (
+                      {pdfError ? (
+                        <div className="text-center p-8">
+                          <FileText className="w-12 h-12 text-red-400 mx-auto mb-3" />
+                          <p className="text-red-400 text-sm font-mono">{pdfError}</p>
+                        </div>
+                      ) : previewUrl ? (
                         <img src={previewUrl} alt="Preview" className="max-w-full max-h-full object-contain" />
                       ) : pdfPreviewSrc ? (
                         <img src={pdfPreviewSrc} alt="PDF Preview" className="max-w-full max-h-full object-contain" />
