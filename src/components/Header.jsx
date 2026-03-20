@@ -1,4 +1,4 @@
-import { Moon, Sun, Package, Activity } from 'lucide-react';
+import { Moon, Sun, Package, Activity, FolderOpen } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 
@@ -46,6 +46,18 @@ export default function Header() {
               to="/"
               className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all text-sm font-medium ${
                 location.pathname === '/'
+                  ? 'bg-[#22c55e]/10 text-[#22c55e]'
+                  : 'text-slate-300 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              <FolderOpen className="w-4 h-4" />
+              <span className="hidden sm:inline">Projects</span>
+            </Link>
+
+            <Link
+              to="/analyze"
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-all text-sm font-medium ${
+                location.pathname.startsWith('/analyze')
                   ? 'bg-[#22c55e]/10 text-[#22c55e]'
                   : 'text-slate-300 hover:bg-white/5 hover:text-white'
               }`}

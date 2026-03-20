@@ -4,6 +4,8 @@ import { AlertCircle, RefreshCw, Home } from 'lucide-react';
 import HomePage from './pages/HomePage';
 import ResultsPage from './pages/ResultsPage';
 import EquipmentTemplatesPage from './pages/EquipmentTemplatesPage';
+import ProjectsPage from './pages/ProjectsPage';
+import ProjectDetailPage from './pages/ProjectDetailPage';
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -100,7 +102,10 @@ function App() {
     <ErrorBoundary>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<HomePage />} />
+          <Route path="/" element={<ProjectsPage />} />
+          <Route path="/project/:id" element={<ProjectDetailPage />} />
+          <Route path="/analyze" element={<HomePage />} />
+          <Route path="/analyze/:projectId" element={<HomePage />} />
           <Route path="/results" element={<ResultsPage />} />
           <Route path="/templates" element={<EquipmentTemplatesPage />} />
         </Routes>
