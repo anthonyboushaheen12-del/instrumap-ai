@@ -9,7 +9,7 @@ import Header from '../components/Header';
 import SuccessToast from '../components/SuccessToast';
 import PdfPanel from '../components/PdfPanel';
 import { exportToExcelWithSummary, calculateSummary } from '../utils/exportToExcel';
-import { getAnalysisData, clearAnalysisData } from '../utils/storage';
+import { getAnalysisData, clearAnalysisData, logCorrection } from '../utils/storage';
 import { getStoredFiles } from '../utils/fileStore';
 import { analyzeDrawing, mockAnalyzeDrawing } from '../utils/analyzeDrawing';
 import { validateFiles } from '../utils/fileValidator';
@@ -103,6 +103,11 @@ export default function ResultsPage() {
 
   const handleCellEdit = (index, field, value) => {
     const updated = [...instruments];
+    const original = updated[index][field];
+    // Log correction if value actually changed (on blur)
+    if (original !== value && (field === 'signalType' || field === 'description' || field === 'tag')) {
+      logCorrection(original, value, field, updated[index].tag);
+    }
     updated[index][field] = value;
     setInstruments(updated);
   };
@@ -211,6 +216,15 @@ export default function ResultsPage() {
     };
     return classes[type] || 'signal-badge';
   };
+
+  const getConfidenceIndicator = (confidence) => {
+    const val = typeof confidence === 'number' ? confidence : 0.85;
+    if (val >= 0.85) return { color: '#22c55e', label: 'HIGH', bg: 'rgba(34,197,94,0.1)' };
+    if (val >= 0.6) return { color: '#eab308', label: 'MED', bg: 'rgba(234,179,8,0.1)' };
+    return { color: '#f85149', label: 'LOW', bg: 'rgba(248,81,73,0.1)' };
+  };
+
+  const lowConfidenceCount = instruments.filter(i => (i.confidence || 0.85) < 0.6).length;
 
   if (!data) {
     return null;
@@ -537,6 +551,14 @@ export default function ResultsPage() {
             </div>
           </div>
 
+          {/* Low Confidence Warning */}
+          {lowConfidenceCount > 0 && (
+            <div className="mb-4 p-3 bg-[#f85149]/5 border border-[#f85149]/20 flex items-center gap-2 font-mono text-xs text-[#f85149]">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+              <span>{lowConfidenceCount} instrument{lowConfidenceCount !== 1 ? 's' : ''} flagged with LOW confidence — review these rows for accuracy.</span>
+            </div>
+          )}
+
           {/* Tags Table */}
           <div className="hud-card overflow-hidden mb-6">
             <div className="hud-card-corners"></div>
@@ -555,6 +577,7 @@ export default function ResultsPage() {
                       <th>TAG ID</th>
                       <th style={{ width: '100px' }}>SIGNAL</th>
                       <th>DESCRIPTION</th>
+                      <th style={{ width: '60px' }}>CONF</th>
                       <th style={{ width: '180px' }}>SOURCE FILE</th>
                       <th style={{ width: '80px' }}>ACTION</th>
                     </tr>
@@ -635,6 +658,20 @@ export default function ResultsPage() {
                                 {instrument.description}
                               </span>
                             )}
+                          </td>
+                          <td>
+                            {(() => {
+                              const ci = getConfidenceIndicator(instrument.confidence);
+                              return (
+                                <span
+                                  className="px-1.5 py-0.5 text-[8px] font-mono border rounded whitespace-nowrap"
+                                  style={{ color: ci.color, borderColor: ci.color + '40', backgroundColor: ci.bg }}
+                                  title={`${Math.round((instrument.confidence || 0.85) * 100)}% confidence`}
+                                >
+                                  {ci.label}
+                                </span>
+                              );
+                            })()}
                           </td>
                           <td className="text-[#7d8590] text-xs truncate max-w-[180px] font-mono" title={instrument.sourceFile}>
                             {instrument.sourceFile || '-'}

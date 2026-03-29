@@ -266,6 +266,7 @@ export function exportToExcelWithSummary(instruments, filename, summary, pidDeta
   // --- I/O List sheet ---
   const ioListHeaders = [
     'SN',
+    'TAG',
     'LOCATION',
     'EQUIPMENT/INSTRUMENT',
     'SIGNAL',
@@ -275,6 +276,7 @@ export function exportToExcelWithSummary(instruments, filename, summary, pidDeta
 
   const dataRows = instruments.map((instrument, index) => [
     index + 1,
+    instrument.tag || '',
     extractLocation(instrument.tag, instrument.location, instrument.equipment),
     extractEquipment(instrument.tag, instrument.equipment, instrument.description),
     instrument.description.toUpperCase(),
@@ -284,8 +286,8 @@ export function exportToExcelWithSummary(instruments, filename, summary, pidDeta
 
   const ioListData = [ioListHeaders, ...dataRows];
   const ioListSheet = XLSX.utils.aoa_to_sheet(ioListData);
-  ioListSheet['!cols'] = autoFitColumns(ioListData, [5, 18, 35, 45, 10, 8]);
-  styleSheet(ioListSheet, ioListHeaders.length, dataRows, 4); // IO TYPE at index 4
+  ioListSheet['!cols'] = autoFitColumns(ioListData, [5, 20, 18, 35, 45, 10, 8]);
+  styleSheet(ioListSheet, ioListHeaders.length, dataRows, 5); // IO TYPE at index 5
   XLSX.utils.book_append_sheet(workbook, ioListSheet, 'IO List');
 
   // --- Summary sheet ---
