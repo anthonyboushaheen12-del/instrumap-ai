@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus, FolderOpen, Database, Activity, FileText,
-  Loader2, Trash2, X, Clock, BarChart3
+  Loader2, Trash2, X, Clock
 } from 'lucide-react';
 import Header from '../components/Header';
 import { supabase } from '../utils/supabase';
@@ -36,7 +36,12 @@ export default function ProjectsPage() {
       const data = await getProjects();
       setProjects(data);
     } catch (err) {
-      setError(err.message);
+      const msg = err.message || '';
+      if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch')) {
+        setError('Cannot reach Supabase. Your project may be paused (free tier auto-pauses after inactivity) — visit supabase.com to resume it, or check your VITE_SUPABASE_URL in .env.');
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }

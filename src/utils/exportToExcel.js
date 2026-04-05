@@ -35,99 +35,160 @@ function extractLocation(tag, providedLocation, equipmentType) {
   return 'FIELD';
 }
 
+// Maps tag prefixes to human-readable equipment/instrument names
+const EQUIPMENT_NAME_MAP = {
+  // Level
+  LIT:   'Level Transmitter',
+  LT:    'Level Transmitter',
+  LSH:   'Level Switch High',
+  LAH:   'Level Switch High',
+  LSHH:  'Level Switch High High',
+  LAHH:  'Level Switch High High',
+  LSL:   'Level Switch Low',
+  LAL:   'Level Switch Low',
+  LSLL:  'Level Switch Low Low',
+  LALL:  'Level Switch Low Low',
+  LI:    'Level Indicator',
+  // Pressure
+  PIT:   'Pressure Transmitter',
+  PT:    'Pressure Transmitter',
+  PSH:   'Pressure Switch High',
+  PAH:   'Pressure Switch High',
+  PAHH:  'Pressure Switch High High',
+  PSL:   'Pressure Switch Low',
+  PAL:   'Pressure Switch Low',
+  PI:    'Pressure Indicator',
+  DPAH:  'Differential Pressure Switch',
+  // Flow
+  FIT:   'Flow Transmitter',
+  FT:    'Flow Transmitter',
+  FS:    'Flow Switch',
+  FAH:   'Flow Switch High',
+  FAL:   'Flow Switch Low',
+  FI:    'Flow Indicator',
+  // Temperature
+  TIT:   'Temperature Transmitter',
+  TT:    'Temperature Transmitter',
+  TI:    'Temperature Indicator',
+  TAH:   'Temperature Switch High',
+  TAL:   'Temperature Switch Low',
+  TAHH:  'Temperature Switch High High',
+  // Analyzers
+  AIT:   'Analyzer Transmitter',
+  AI:    'Analyzer Indicator',
+  // Valves
+  MV:    'Motorized Valve',
+  SOV:   'Solenoid Valve',
+  XV:    'Solenoid Valve',
+  FCV:   'Flow Control Valve',
+  FV:    'Flow Control Valve',
+  ZS:    'Limit Switch',
+  ZI:    'Position Indicator',
+  ZIO:   'Position Indicator (Open)',
+  ZIC:   'Position Indicator (Closed)',
+  ZC:    'Position Controller',
+  // Hand switches / controls
+  HS:    'Hand Switch',
+  HSO:   'Hand Switch (Open)',
+  HSC:   'Hand Switch (Close)',
+  HSR:   'Hand Switch (Start)',
+  HSS:   'Hand Switch (Stop)',
+  HI:    'Selector Switch',
+  HA:    'Hand Switch',
+  // Status / alarms
+  YI:    'Status Indicator',
+  YA:    'Alarm Annunciator',
+  // Speed / current
+  SI:    'Speed Indicator',
+  SC:    'Speed Controller',
+  II:    'Current Indicator',
+  NI:    'Torque Indicator',
+  VI:    'Vibration Indicator',
+  // Other
+  OCU:   'Odor Control Unit',
+  UPS:   'UPS',
+  MCC:   'Motor Control Center',
+  ATS:   'Automatic Transfer Switch',
+  FACP:  'Fire Alarm Control Panel',
+  EF:    'Exhaust Fan',
+  SF:    'Supply Fan',
+};
+
+/**
+ * Determine the signal category (Alarm / Indication / Command) for a tag.
+ */
+function extractSignalCategory(tag, description, signalType) {
+  // DO and AO are always commands
+  if (signalType === 'DO' || signalType === 'AO') return 'Command';
+
+  const prefix = tag.toUpperCase().split('-')[0];
+
+  const ALARM_PREFIXES = new Set([
+    'YA',
+    'LAH', 'LAHH', 'LAL', 'LALL',
+    'PAH', 'PAHH', 'PAL', 'PALL',
+    'TAH', 'TAHH', 'TAL', 'TALL',
+    'FAH', 'FAL',
+    'DPAH', 'DPAHH',
+    'XI',
+  ]);
+  const SWITCH_PREFIXES = new Set([
+    'LSH', 'LSHH', 'LSL', 'LSLL',
+    'PSH', 'PSL',
+    'FS', 'ZS',
+  ]);
+
+  if (ALARM_PREFIXES.has(prefix)) return 'Alarm';
+  if (SWITCH_PREFIXES.has(prefix)) return 'Alarm';
+
+  // Fall back to description keywords
+  const descUpper = (description || '').toUpperCase();
+  if (descUpper.includes('ALARM') || descUpper.includes('FAULT') ||
+      descUpper.includes('FAIL') || descUpper.includes('TRIP')) {
+    return 'Alarm';
+  }
+
+  return 'Indication';
+}
+
 /**
  * Extract equipment type from instrument tag using library
  */
-function extractEquipment(tag, providedEquipment, description) {
-  // Use provided equipment if available, unless it's a generic label
+function extractEquipment(tag, providedEquipment) {
+  const prefix = tag.toUpperCase().split('-')[0];
+
+  // Resolve from the human-readable map first
+  if (EQUIPMENT_NAME_MAP[prefix]) {
+    return EQUIPMENT_NAME_MAP[prefix];
+  }
+
+  // Use provided equipment if it's a meaningful value (not generic)
   if (providedEquipment && providedEquipment.trim()) {
     const upper = providedEquipment.trim().toUpperCase();
-    // If the AI returned a generic label, try to resolve to the actual instrument tag
     if (upper !== 'INSTRUMENTATION' && upper !== 'INSTRUMENT' && upper !== 'UNKNOWN') {
+      // Check if the provided value is itself an abbreviation we can expand
+      if (EQUIPMENT_NAME_MAP[upper]) return EQUIPMENT_NAME_MAP[upper];
       return providedEquipment.trim();
     }
   }
 
-  // Try to match using library
+  // Fallback: try the library
   const componentMatch = lookupComponent(tag);
-
   if (componentMatch) {
+    const libPrefix = componentMatch.componentTag.toUpperCase().split(/[\s\n(]/)[0];
+    if (EQUIPMENT_NAME_MAP[libPrefix]) return EQUIPMENT_NAME_MAP[libPrefix];
     return componentMatch.componentTag;
   }
 
-  // Try matching by prefix (for multi-point equipment)
-  const tagParts = tag.split('-');
-  if (tagParts.length > 1) {
-    const prefixMatch = lookupComponent(tagParts[0]);
-    if (prefixMatch) {
-      return prefixMatch.componentTag;
-    }
-    // For single-loop instruments, use the tag prefix as equipment name
-    const prefix = tagParts[0].toUpperCase();
-    const singleLoopTags = ['LIT', 'PIT', 'FIT', 'TIT', 'AIT', 'LSL', 'LSLL', 'LSH', 'LSHH', 'PSL', 'PSH', 'FS', 'SOV'];
-    if (singleLoopTags.includes(prefix)) {
-      return prefix;
-    }
-  }
-
-  // Fallback to heuristics for common patterns
+  // Final heuristics
   const tagUpper = tag.toUpperCase();
-
-  // Level instruments - return component tag prefix
-  if (tagUpper.match(/^LIT/)) return 'LIT';
-  if (tagUpper.match(/^LT/)) return 'LT';
-  if (tagUpper.match(/^LSLL/)) return 'LSLL';
-  if (tagUpper.match(/^LSHH/)) return 'LSHH';
-  if (tagUpper.match(/^LSL/)) return 'LSL';
-  if (tagUpper.match(/^LSH/)) return 'LSH';
-  if (tagUpper.match(/^LA/)) return tag.split('-')[0] || 'LA';
-
-  // Pressure instruments
-  if (tagUpper.match(/^PIT/)) return 'PIT';
-  if (tagUpper.match(/^PT/)) return 'PT';
-  if (tagUpper.match(/^PSH/)) return 'PSH';
-  if (tagUpper.match(/^PSL/)) return 'PSL';
-
-  // Flow instruments
-  if (tagUpper.match(/^FIT/)) return 'FIT';
-  if (tagUpper.match(/^FT/)) return 'FT';
-  if (tagUpper.match(/^FS/)) return 'FS';
-
-  // Temperature instruments
-  if (tagUpper.match(/^TIT/)) return 'TIT';
-  if (tagUpper.match(/^TT/)) return 'TT';
-
-  // Analyzers
-  if (tagUpper.match(/^AIT/)) return 'AIT';
-
-  // Pumps
-  if (tagUpper.includes('SPS') || (tagUpper.includes('PUMP') && tagUpper.includes('SUMP'))) {
-    return 'SUMP PIT PUMP';
-  }
-  if (tagUpper.includes('PUMP')) return 'PUMP';
-
-  // OCU
-  if (tagUpper.includes('OCU')) return 'ODOR CONTROL UNIT';
-
-  // UPS
+  if (tagUpper.includes('PUMP')) return 'Pump';
+  if (tagUpper.includes('OCU')) return 'Odor Control Unit';
   if (tagUpper.includes('UPS')) return 'UPS';
+  if (tagUpper.includes('EF') || tagUpper.includes('EXHAUST')) return 'Exhaust Fan';
+  if (tagUpper.includes('SF') || tagUpper.includes('SUPPLY FAN')) return 'Supply Fan';
 
-  // Valves
-  if (tagUpper.match(/^ZS/)) return 'VALVE POSITION SWITCH';
-  if (tagUpper.match(/^XV|^SOV/)) return 'SOV';
-  if (tagUpper.match(/^FV|^FCV/)) return 'FLOW CONTROL VALVE';
-  if (tagUpper.match(/^MV/)) return 'MV';
-
-  // Motors/Fans
-  if (tagUpper.match(/^M-/)) return 'MOTOR';
-  if (tagUpper.includes('EF') || tagUpper.includes('EXHAUST')) return 'EXHAUST FAN';
-  if (tagUpper.includes('SF') || tagUpper.includes('SUPPLY')) return 'SUPPLY FAN';
-
-  // Status/Alarms - use the tag itself
-  if (tagUpper.match(/^YI/)) return tag.split('-')[0] || 'YI';
-  if (tagUpper.match(/^YA/)) return tag.split('-')[0] || 'YA';
-
-  return tag.split('-')[0] || 'INSTRUMENT';
+  return prefix || 'Instrument';
 }
 
 // --- Styling constants ---
@@ -278,8 +339,8 @@ export function exportToExcelWithSummary(instruments, filename, summary, pidDeta
     index + 1,
     instrument.tag || '',
     extractLocation(instrument.tag, instrument.location, instrument.equipment),
-    extractEquipment(instrument.tag, instrument.equipment, instrument.description),
-    instrument.description.toUpperCase(),
+    extractEquipment(instrument.tag, instrument.equipment),
+    extractSignalCategory(instrument.tag, instrument.description, instrument.signalType),
     instrument.signalType,
     instrument.isAlarm ? 'X' : '',
   ]);
